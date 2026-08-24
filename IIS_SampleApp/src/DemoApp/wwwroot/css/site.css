@@ -1,0 +1,27 @@
+body {
+    background-color: #f4f6f9;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.icon-box {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.navbar {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.card {
+    border-radius: 0.75rem;
+}
+
+footer {
+    background-color: #f4f6f9;
+}

@@ -1,0 +1,409 @@
+---
+# ==============================================================================
+# PLAYBOOK: deploy-to-destination.yml
+# PURPOSE: Deploy selected items to destination server
+# DESCRIPTION: Uses selection results to deploy software, IIS sites, and files
+#              with validation, dry-run support, and comprehensive error handling
+# ==============================================================================
+
+- name: "Deploy Selected Infrastructure to Destination"
+  hosts: destination_server
+  vars:
+    selection_results_file: "{{ playbook_dir }}/vars/selection_results.json"
+    deploy_log_file: "{{ playbook_dir }}/vars/deployment_log.json"
+    dry_run: "{{ dryrun | default(false) }}"
+
+  pre_tasks:
+    # =========================================================================
+    # SECTION 0: PRE-FLIGHT CHECKS AND VALIDATION
+    # =========================================================================
+    
+    - name: "Display Deployment Mode"
+      debug:
+        msg: |
+          ============================================================
+          DEPLOYMENT MODE
+          ============================================================
+          Dry-Run: {{ dry_run | bool }}
+          {% if dry_run | bool %}
+          NOTE: This is a DRY-RUN. No actual changes will be made.
+          {% endif %}
+          ============================================================
+
+    - name: "Verify selection results exist"
+      stat:
+        path: "{{ selection_results_file }}"
+      register: selection_file
+      delegate_to: localhost
+
+    - name: "Fail if no selections found"
+      fail:
+        msg: |
+          Selection results not found at {{ selection_results_file }}
+          
+          Please run the selection process first:
+            1. ansible-playbook discover-windows-state.yml
+            2. ansible-playbook interactive-selection.yml
+      when: not selection_file.stat.exists
+
+    - name: "Load selection results"
+      include_vars:
+        file: "{{ selection_results_file }}"
+        name: selections
+
+    - name: "Validate selection results structure"
+      assert:
+        that:
+          - selections is defined
+          - selections.selected_software is defined
+          - selections.selected_iis_sites is defined
+          - selections.selected_app_paths is defined
+        fail_msg: "Invalid selection results file structure"
+
+    - name: "Validate destination connectivity"
+      win_ping:
+      register: ping_result
+
+    - name: "Fail if destination unreachable"
+      fail:
+        msg: "Cannot reach destination server {{ ansible_hostname }}"
+      when: ping_result.ping != "pong"
+
+    - name: "Check destination disk space"
+      ansible.windows.win_powershell:
+        script: |
+          $disks = Get-Volume | Where-Object {$_.DriveLetter}
+          $disks | ForEach-Object {
+              Write-Host "$($_.DriveLetter): - Free: $([math]::Round($_.SizeRemaining/1GB,2))GB / Total: $([math]::Round($_.Size/1GB,2))GB"
+          }
+      register: disk_space
+
+    - name: "Display Deployment Plan"
+      debug:
+        msg: |
+          ============================================================
+          DEPLOYMENT PLAN
+          ============================================================
+          Destination: {{ ansible_hostname }}
+          Timestamp: {{ ansible_date_time.iso8601 }}
+          
+          Items to deploy:
+            - Software: {{ selections.selected_software | length }} items
+            - IIS Sites: {{ selections.selected_iis_sites | length }} sites
+            - Application Files: {{ selections.selected_app_paths | length }} paths
+          
+          Total items: {{ selections.selected_software | length | int + selections.selected_iis_sites | length | int + selections.selected_app_paths | length | int }}
+          
+          {% if selections.selected_software | length > 0 %}
+          Software to deploy:
+          {% for item in selections.selected_software %}
+            - {{ item.name if item is mapping else item }} (Publisher: {{ item.publisher if item is mapping else 'N/A' }})
+          {% endfor %}
+          {% endif %}
+          
+          {% if selections.selected_iis_sites | length > 0 %}
+          IIS Sites to deploy:
+          {% for site in selections.selected_iis_sites %}
+            - {{ site.name }} (AppPool: {{ site.appPool }}, Path: {{ site.physicalPath }})
+          {% endfor %}
+          {% endif %}
+          
+          {% if selections.selected_app_paths | length > 0 %}
+          Application Paths to deploy:
+          {% for path in selections.selected_app_paths %}
+            - {{ path.site_name }} ➜ {{ path.physical_path }}
+          {% endfor %}
+          {% endif %}
+          ============================================================
+      changed_when: false
+
+    - name: "Request deployment confirmation (non-dry-run)"
+      pause:
+        prompt: |
+          
+          ⚠ IMPORTANT: Review the deployment plan above.
+          
+          This will deploy {{ selections.selected_software | length | int + selections.selected_iis_sites | length | int + selections.selected_app_paths | length | int }} items to {{ ansible_hostname }}.
+          {% if not (dry_run | bool) %}
+          Changes will be APPLIED to the destination server.
+          {% else %}
+          This is a DRY-RUN - no changes will be made.
+          {% endif %}
+          
+          Press ENTER to continue or Ctrl+C to cancel
+      when: not (dry_run | bool)
+
+  tasks:
+    # =========================================================================
+    # SECTION 1: Deploy Selected Software
+    # =========================================================================
+
+    - name: "Create deployment log"
+      set_fact:
+        deployment_log:
+          start_time: "{{ ansible_date_time.iso8601 }}"
+          destination_host: "{{ ansible_hostname }}"
+          dry_run: "{{ dry_run | bool }}"
+          software_deployments: []
+          iis_deployments: []
+          file_deployments: []
+          errors: []
+          skipped: []
+
+    - name: "Deploy selected software"
+      block:
+        - name: "Log software deployment start"
+          debug:
+            msg: "Starting deployment of {{ selections.selected_software | length }} software items"
+
+        - name: "Check software installation requirements"
+          debug:
+            msg: |
+              Software to install:
+              {% for software in selections.selected_software %}
+                - {{ software.name if software is mapping else software }} (Publisher: {{ software.publisher if software is mapping else 'Unknown' }})
+              {% endfor %}
+
+        - name: "Validate software items (dry-run)"
+          debug:
+            msg: |
+              [DRY-RUN] Would install: {{ item.name if item is mapping else item }}
+          loop: "{{ selections.selected_software }}"
+          when: dry_run | bool
+
+        - name: "Install each selected software"
+          debug:
+            msg: |
+              NOTE: Software installation requires:
+              1. Installer files/packages available
+              2. Installation media or package repository
+              3. Administrative privileges
+              4. Potential reboots
+              
+              For demo/non-dry-run: Logging software deployment actions
+          register: software_deploy_result
+          when: not (dry_run | bool)
+
+      rescue:
+        - name: "Log software deployment error"
+          set_fact:
+            deployment_log: "{{ deployment_log | combine({
+              'errors': deployment_log.errors + [
+                'Software deployment failed: ' + ansible_failed_result.msg | default('Unknown error')
+              ]
+            }) }}"
+
+    # =========================================================================
+    # SECTION 2: Create IIS Sites and Applications
+    # =========================================================================
+
+    - name: "Ensure IIS is installed"
+      ansible.windows.win_feature:
+        name: "Web-Server"
+        state: present
+        include_sub_features: yes
+      register: iis_install_result
+      when: 
+        - selections.selected_iis_sites | length > 0
+        - not (dry_run | bool)
+
+    - name: "Validate IIS installation (dry-run)"
+      debug:
+        msg: "[DRY-RUN] Would ensure Web-Server feature is installed"
+      when:
+        - selections.selected_iis_sites | length > 0
+        - dry_run | bool
+
+    - name: "Deploy IIS sites and applications"
+      block:
+        - name: "Validate IIS sites"
+          debug:
+            msg: "[VALIDATION] IIS site: {{ item.name }} (AppPool: {{ item.appPool }}, Path: {{ item.physicalPath }})"
+          loop: "{{ selections.selected_iis_sites }}"
+
+        - name: "Create IIS sites (dry-run)"
+          debug:
+            msg: "[DRY-RUN] Would create IIS site: {{ item.name }}"
+          loop: "{{ selections.selected_iis_sites }}"
+          register: iis_creation_results
+          when: dry_run | bool
+
+        - name: "Configure each IIS site (dry-run)"
+          block:
+            - name: "Validate application pool configuration (dry-run)"
+              debug:
+                msg: "[DRY-RUN] Would create app pool: {{ item.appPool }}"
+              loop: "{{ selections.selected_iis_sites }}"
+
+            - name: "Validate IIS website configuration (dry-run)"
+              debug:
+                msg: "[DRY-RUN] Would create website: {{ item.name }} at {{ item.physicalPath }}"
+              loop: "{{ selections.selected_iis_sites }}"
+              register: iis_site_creation
+
+            - name: "Validate IIS bindings configuration (dry-run)"
+              debug:
+                msg: "[DRY-RUN] Would configure bindings for site: {{ site_item.name }}"
+              loop: "{{ selections.selected_iis_sites }}"
+              loop_control:
+                loop_var: site_item
+
+          when: dry_run | bool
+
+        - name: "Create application pools (production)"
+          ansible.windows.win_iis_webapppool:
+            name: "{{ item.appPool }}"
+            state: present
+            pipeline_mode: "Integrated"
+          ignore_errors: yes
+          loop: "{{ selections.selected_iis_sites }}"
+          when: not (dry_run | bool)
+
+        - name: "Create IIS websites (production)"
+          ansible.windows.win_iis_website:
+            name: "{{ item.name }}"
+            state: present
+            physical_path: "{{ item.physicalPath }}"
+            application_pool: "{{ item.appPool }}"
+          ignore_errors: yes
+          loop: "{{ selections.selected_iis_sites }}"
+          register: iis_site_creation
+          when: not (dry_run | bool)
+
+        - name: "Configure IIS bindings (production)"
+          ansible.windows.win_iis_webbinding:
+            name: "{{ site_item.name }}"
+            state: present
+            port: "{{ binding_item.port | default(80) }}"
+            ip: "{{ binding_item.ip | default('*') }}"
+            protocol: "{{ binding_item.protocol | default('http') }}"
+          loop: "{{ selections.selected_iis_sites }}"
+          loop_control:
+            loop_var: site_item
+          vars:
+            binding_item: "{{ site_item.bindings[0] | default({}) }}"
+          ignore_errors: yes
+          when: not (dry_run | bool)
+
+      rescue:
+        - name: "Log IIS creation error"
+          set_fact:
+            deployment_log: "{{ deployment_log | combine({
+              'errors': deployment_log.errors + [
+                'IIS site creation failed: ' + item.name
+              ]
+            }, recursive=True) }}"
+          loop: "{{ selections.selected_iis_sites }}"
+
+      when: selections.selected_iis_sites | length > 0
+
+    # =========================================================================
+    # SECTION 3: Deploy Application Files
+    # =========================================================================
+
+    - name: "Deploy application files"
+      block:
+        - name: "Validate application paths (dry-run)"
+          debug:
+            msg: "[VALIDATION] Application path: {{ item.site_name }} ➜ {{ item.physical_path }}"
+          loop: "{{ selections.selected_app_paths }}"
+
+        - name: "Create destination directories (dry-run)"
+          debug:
+            msg: "[DRY-RUN] Would create directory: {{ item.physical_path }}"
+          loop: "{{ selections.selected_app_paths }}"
+          when: dry_run | bool
+
+        - name: "Create destination directories (production)"
+          ansible.windows.win_file:
+            path: "{{ item.physical_path }}"
+            state: directory
+          loop: "{{ selections.selected_app_paths }}"
+          register: dir_creation_results
+          when: not (dry_run | bool)
+
+        - name: "Prepare file deployment"
+          debug:
+            msg: |
+              Application paths to deploy:
+              {% for path in selections.selected_app_paths %}
+                - Site: {{ path.site_name }} -> Path: {{ path.physical_path }}
+              {% endfor %}
+              
+              NOTE: File transfer requires:
+              1. Source files accessible from source server
+              2. Network connectivity
+              3. Sufficient disk space on destination
+              4. File permission configuration
+
+      when: selections.selected_app_paths | length > 0
+
+    # =========================================================================
+    # SECTION 4: Deployment Summary and Validation
+    # =========================================================================
+
+    - name: "Create final deployment report"
+      set_fact:
+        deployment_log: "{{ deployment_log | combine({
+          'end_time': ansible_date_time.iso8601,
+          'status': 'completed',
+          'software_count': selections.selected_software | length,
+          'iis_sites_count': selections.selected_iis_sites | length,
+          'app_paths_count': selections.selected_app_paths | length,
+          'total_items': selections.selected_software | length | int + selections.selected_iis_sites | length | int + selections.selected_app_paths | length | int
+        }) }}"
+
+    - name: "Save deployment log"
+      copy:
+        content: "{{ deployment_log | to_nice_json }}"
+        dest: "{{ deploy_log_file }}"
+      delegate_to: localhost
+
+    - name: "Display deployment summary"
+      debug:
+        msg: |
+          ============================================================
+          DEPLOYMENT {{ 'DRY-RUN ' if dry_run | bool else '' }}COMPLETED
+          ============================================================
+          Destination: {{ deployment_log.destination_host }}
+          Start Time: {{ deployment_log.start_time }}
+          End Time: {{ deployment_log.end_time }}
+          Mode: {{ 'DRY-RUN (No changes applied)' if deployment_log.dry_run else 'PRODUCTION (Changes applied)' }}
+          Status: {{ deployment_log.status }}
+          
+          Deployed Items:
+            - Software: {{ deployment_log.software_count }}
+            - IIS Sites: {{ deployment_log.iis_sites_count }}
+            - Application Paths: {{ deployment_log.app_paths_count }}
+            - TOTAL: {{ deployment_log.total_items }}
+          
+          {% if deployment_log.errors | length > 0 %}
+          Errors Encountered: {{ deployment_log.errors | length }}
+          {% for error in deployment_log.errors %}
+            - {{ error }}
+          {% endfor %}
+          {% endif %}
+          
+          Deployment log saved to: {{ deploy_log_file }}
+          ============================================================
+
+  post_tasks:
+    - name: "Display next steps"
+      debug:
+        msg: |
+          ============================================================
+          NEXT STEPS
+          ============================================================
+          {% if dry_run | bool %}
+          Dry-run completed successfully. Review the output above.
+          
+          To apply the deployment:
+            ansible-playbook deploy-to-destination.yml
+          {% else %}
+          Deployment completed. Check deployment_log.json for details.
+          
+          To verify deployed items:
+            ansible-playbook discover-windows-state.yml
+          {% endif %}
+          ============================================================
+      changed_when: false

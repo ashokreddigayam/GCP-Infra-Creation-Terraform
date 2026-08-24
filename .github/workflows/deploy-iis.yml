@@ -1,0 +1,149 @@
+name: Deploy ASP.NET App to IIS
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'IIS_SampleApp/**'
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION:    '8.0.x'
+  PROJECT_PATH:      'IIS_SampleApp/src/DemoApp/DemoApp.csproj'
+  IIS_SITE_NAME:     'DemoApp'
+  IIS_PORT:          '8080'
+  APP_POOL_NAME:     'DemoAppPool'
+  PHYSICAL_PATH:     'C:\inetpub\DemoApp'
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy to IIS
+    runs-on: self-hosted        # Windows Server with IIS + self-hosted runner installed
+
+    steps:
+
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Setup .NET ─────────────────────────────────────────────────────────
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # ── 3. Restore & Build ────────────────────────────────────────────────────
+      - name: Restore dependencies
+        shell: powershell
+        run: dotnet restore "${{ env.PROJECT_PATH }}"
+
+      - name: Build (Release)
+        shell: powershell
+        run: dotnet build "${{ env.PROJECT_PATH }}" --configuration Release --no-restore
+
+      # ── 4. Publish ────────────────────────────────────────────────────────────
+      - name: Publish application
+        shell: powershell
+        run: |
+          dotnet publish "${{ env.PROJECT_PATH }}" `
+            --configuration Release `
+            --output "${{ github.workspace }}\publish" `
+            --no-build
+
+      # ── 5. Stop existing IIS site before file copy (if running) ───────────────
+      - name: Stop IIS site if running
+        shell: powershell
+        run: |
+          Import-Module WebAdministration -ErrorAction Stop
+
+          $site = Get-WebSite -Name "${{ env.IIS_SITE_NAME }}" -ErrorAction SilentlyContinue
+          if ($site -and $site.State -eq 'Started') {
+            Stop-WebSite -Name "${{ env.IIS_SITE_NAME }}"
+            Write-Host "Stopped site: ${{ env.IIS_SITE_NAME }}"
+          } else {
+            Write-Host "Site not running or does not exist yet — nothing to stop."
+          }
+
+      # ── 6. Ensure physical path exists and copy published files ───────────────
+      - name: Deploy files to IIS physical path
+        shell: powershell
+        run: |
+          $dest = "${{ env.PHYSICAL_PATH }}"
+
+          if (-not (Test-Path $dest)) {
+            New-Item -ItemType Directory -Path $dest -Force | Out-Null
+            Write-Host "Created directory: $dest"
+          }
+
+          Copy-Item -Path "${{ github.workspace }}\publish\*" `
+                    -Destination $dest `
+                    -Recurse -Force
+
+          Write-Host "Files deployed to: $dest"
+
+      # ── 7. Configure App Pool and IIS Site (idempotent) ───────────────────────
+      - name: Configure IIS App Pool and Site
+        shell: powershell
+        run: |
+          Import-Module WebAdministration -ErrorAction Stop
+
+          # ── App Pool ──────────────────────────────────────────────────────────
+          $poolPath = "IIS:\AppPools\${{ env.APP_POOL_NAME }}"
+          $pool = Get-Item $poolPath -ErrorAction SilentlyContinue
+
+          if (-not $pool) {
+            New-WebAppPool -Name "${{ env.APP_POOL_NAME }}"
+            # No managed runtime — required for ASP.NET Core
+            Set-ItemProperty $poolPath -Name managedRuntimeVersion -Value ""
+            Set-ItemProperty $poolPath -Name startMode            -Value "AlwaysRunning"
+            Write-Host "Created App Pool: ${{ env.APP_POOL_NAME }}"
+          } else {
+            Write-Host "App Pool already exists: ${{ env.APP_POOL_NAME }} — skipping creation."
+          }
+
+          # ── IIS Site ──────────────────────────────────────────────────────────
+          $site = Get-WebSite -Name "${{ env.IIS_SITE_NAME }}" -ErrorAction SilentlyContinue
+
+          if (-not $site) {
+            # Site does not exist → create it
+            New-WebSite -Name            "${{ env.IIS_SITE_NAME }}" `
+                        -Port            ${{ env.IIS_PORT }} `
+                        -PhysicalPath    "${{ env.PHYSICAL_PATH }}" `
+                        -ApplicationPool "${{ env.APP_POOL_NAME }}"
+
+            Write-Host "Created IIS site '${{ env.IIS_SITE_NAME }}' on port ${{ env.IIS_PORT }}"
+          } else {
+            # Site already exists → skip creation, just update physical path in case it changed
+            Write-Host "IIS site '${{ env.IIS_SITE_NAME }}' already exists — skipping creation."
+            Set-ItemProperty "IIS:\Sites\${{ env.IIS_SITE_NAME }}" `
+                             -Name physicalPath `
+                             -Value "${{ env.PHYSICAL_PATH }}"
+          }
+
+      # ── 8. Start the site ─────────────────────────────────────────────────────
+      - name: Start IIS site
+        shell: powershell
+        run: |
+          Import-Module WebAdministration -ErrorAction Stop
+
+          # -ErrorAction SilentlyContinue prevents failure if pool/site is already running
+          Start-WebAppPool -Name "${{ env.APP_POOL_NAME }}" -ErrorAction SilentlyContinue
+          Start-WebSite    -Name "${{ env.IIS_SITE_NAME }}" -ErrorAction SilentlyContinue
+
+          $site = Get-WebSite -Name "${{ env.IIS_SITE_NAME }}"
+          Write-Host "Site state: $($site.State)"
+
+      # ── 9. Health check ───────────────────────────────────────────────────────
+      - name: Verify deployment (health check)
+        shell: powershell
+        run: |
+          Start-Sleep -Seconds 5
+          try {
+            $res = Invoke-WebRequest -Uri "http://localhost:${{ env.IIS_PORT }}" `
+                                     -UseBasicParsing -TimeoutSec 15
+            Write-Host "Health check passed — HTTP $($res.StatusCode)"
+          } catch {
+            Write-Warning "Health check failed: $_"
+            exit 1
+          }

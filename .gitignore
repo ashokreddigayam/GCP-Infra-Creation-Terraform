@@ -1,0 +1,26 @@
+# .NET build outputs
+bin/
+obj/
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+.terraform.lock.hcl
+crash.log
+
+# Secrets — never commit credentials
+*.json.key
+*service-account*.json
+*sa-key*.json
+gcp-sa-key.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.user

@@ -1,0 +1,138 @@
+@model DemoApp.Models.HomeViewModel
+@{
+    ViewData["Title"] = "Dashboard";
+    var envBadge = Model.Environment == "Production" ? "danger" : "warning";
+}
+
+<div class="row g-0 align-items-center mb-4">
+    <div class="col">
+        <h2 class="fw-bold mb-0">
+            <i class="bi bi-grid-fill me-2 text-primary"></i>@Model.AppName
+        </h2>
+        <p class="text-muted mb-0 small">Deployment verification dashboard &mdash; IIS hosted ASP.NET Core demo</p>
+    </div>
+    <div class="col-auto">
+        <span class="badge bg-@envBadge fs-6 px-3 py-2">
+            <i class="bi bi-tag-fill me-1"></i>@Model.Environment
+        </span>
+    </div>
+</div>
+
+<!-- Status Banner -->
+<div class="alert alert-success d-flex align-items-center mb-4 shadow-sm" role="alert">
+    <i class="bi bi-check-circle-fill fs-4 me-3"></i>
+    <div>
+        <strong>Application is running successfully on IIS.</strong>
+        <span class="ms-2 text-muted small">Deployment verified &bull; All systems operational</span>
+    </div>
+</div>
+
+<!-- Info Cards -->
+<div class="row g-3 mb-4">
+
+    <div class="col-md-4">
+        <div class="card shadow-sm h-100 border-0">
+            <div class="card-body">
+                <div class="d-flex align-items-center mb-2">
+                    <div class="icon-box bg-primary-subtle rounded-3 p-2 me-3">
+                        <i class="bi bi-app-indicator fs-4 text-primary"></i>
+                    </div>
+                    <div>
+                        <p class="text-muted small mb-0">Application</p>
+                        <h6 class="fw-bold mb-0">@Model.AppName</h6>
+                    </div>
+                </div>
+                <hr class="my-2" />
+                <div class="d-flex justify-content-between small">
+                    <span class="text-muted">Version</span>
+                    <span class="fw-semibold">v@Model.Version</span>
+                </div>
+                <div class="d-flex justify-content-between small mt-1">
+                    <span class="text-muted">Owner</span>
+                    <span class="fw-semibold">@Model.Owner</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card shadow-sm h-100 border-0">
+            <div class="card-body">
+                <div class="d-flex align-items-center mb-2">
+                    <div class="icon-box bg-success-subtle rounded-3 p-2 me-3">
+                        <i class="bi bi-pc-display fs-4 text-success"></i>
+                    </div>
+                    <div>
+                        <p class="text-muted small mb-0">Host Server</p>
+                        <h6 class="fw-bold mb-0">@Model.ServerName</h6>
+                    </div>
+                </div>
+                <hr class="my-2" />
+                <div class="d-flex justify-content-between small">
+                    <span class="text-muted">OS</span>
+                    <span class="fw-semibold text-truncate ms-2" style="max-width:160px;" title="@Model.OSDescription">@Model.OSDescription</span>
+                </div>
+                <div class="d-flex justify-content-between small mt-1">
+                    <span class="text-muted">Runtime</span>
+                    <span class="fw-semibold text-truncate ms-2" style="max-width:160px;" title="@Model.DotNetVersion">@Model.DotNetVersion</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card shadow-sm h-100 border-0">
+            <div class="card-body">
+                <div class="d-flex align-items-center mb-2">
+                    <div class="icon-box bg-warning-subtle rounded-3 p-2 me-3">
+                        <i class="bi bi-clock-history fs-4 text-warning"></i>
+                    </div>
+                    <div>
+                        <p class="text-muted small mb-0">Last Deployed</p>
+                        <h6 class="fw-bold mb-0 small">@Model.DeployedAt</h6>
+                    </div>
+                </div>
+                <hr class="my-2" />
+                <div class="d-flex justify-content-between small">
+                    <span class="text-muted">Pipeline</span>
+                    <span class="fw-semibold">GitHub Actions</span>
+                </div>
+                <div class="d-flex justify-content-between small mt-1">
+                    <span class="text-muted">Host</span>
+                    <span class="fw-semibold">IIS (Self-hosted)</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Deployment Pipeline Steps -->
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-dark text-white fw-semibold">
+        <i class="bi bi-diagram-3-fill me-2"></i>CI/CD Pipeline &mdash; GitHub Actions
+    </div>
+    <div class="card-body">
+        <div class="row text-center g-2">
+            @{
+                var steps = new[]
+                {
+                    ("bi-code-slash",       "primary",  "Checkout Code"),
+                    ("bi-wrench-adjustable","info",     "Build & Publish"),
+                    ("bi-hdd-rack",         "secondary","Copy to IIS Path"),
+                    ("bi-check2-circle",    "success",  "Site Check"),
+                    ("bi-play-circle-fill", "success",  "Start Site"),
+                };
+            }
+            @foreach (var (icon, color, label) in steps)
+            {
+                <div class="col">
+                    <div class="rounded-3 p-3 bg-@color bg-opacity-10 border border-@color border-opacity-25">
+                        <i class="bi @icon fs-3 text-@color"></i>
+                        <p class="small fw-semibold mb-0 mt-1">@label</p>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>

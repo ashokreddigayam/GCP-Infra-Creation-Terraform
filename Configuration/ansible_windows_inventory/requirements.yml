@@ -1,0 +1,20 @@
+# ==============================================================================
+# REQUIREMENTS: requirements.yml
+# PURPOSE: Define required Ansible collections and dependencies
+# INSTALLATION: ansible-galaxy install -r requirements.yml
+# ==============================================================================
+
+collections:
+  # Core Windows collection with win_* modules
+  - name: ansible.windows
+    version: ">=1.10.0"
+  
+  # Community general collection for additional Windows support
+  - name: community.windows
+    version: ">=1.10.0"
+  
+  # For PowerShell execution and management
+  - name: community.general
+    version: ">=4.8.0"
+
+python_requires: ">=3.9"

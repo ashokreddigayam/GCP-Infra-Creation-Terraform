@@ -1,0 +1,213 @@
+name: Infrastructure Deployment
+
+on:
+  push:
+    branches: [main]
+    paths: ["Infrastructure/**"]
+  pull_request:
+    branches: [main]
+    paths: ["Infrastructure/**"]
+  workflow_dispatch:
+
+env:
+  TF_VERSION: "1.9.8"   # ~> is Terraform constraint syntax — setup-terraform requires exact semver
+
+jobs:
+  # ── Plan: runs on every PR and push ──────────────────────────────────────────
+  plan:
+    name: Terraform Plan
+    runs-on: [self-hosted, windows]
+    defaults:
+      run:
+        working-directory: Infrastructure
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write GCP credentials from secret
+        shell: powershell
+        env:
+          GCP_CREDS: ${{ secrets.GCP_CREDENTIALS }}
+        run: |
+          Set-Content -Path "$env:RUNNER_TEMP\gcp-sa-key.json" -Value $env:GCP_CREDS -Encoding UTF8
+
+      - name: Patch credentials path for CI runner
+        shell: powershell
+        run: |
+          $credPath = ("$env:RUNNER_TEMP\gcp-sa-key.json") -replace '\\', '/'
+          (Get-Content provider.tf -Raw) `
+            -replace 'credentials\s*=\s*file\("[^"]*"\)', "credentials = file(`"$credPath`")" `
+            | Set-Content provider.tf -NoNewline
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        shell: powershell
+        run: terraform init -no-color
+
+      - name: Terraform Validate
+        shell: powershell
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        shell: powershell
+        run: terraform plan -no-color -out=tfplan
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: Infrastructure/tfplan
+          retention-days: 1
+
+  # ── Apply: runs only on push to main ─────────────────────────────────────────
+  apply:
+    name: Terraform Apply
+    runs-on: [self-hosted, windows]
+    needs: plan
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    defaults:
+      run:
+        working-directory: Infrastructure
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write GCP credentials from secret
+        shell: powershell
+        env:
+          GCP_CREDS: ${{ secrets.GCP_CREDENTIALS }}
+        run: |
+          Set-Content -Path "$env:RUNNER_TEMP\gcp-sa-key.json" -Value $env:GCP_CREDS -Encoding UTF8
+
+      - name: Patch credentials path for CI runner
+        shell: powershell
+        run: |
+          $credPath = ("$env:RUNNER_TEMP\gcp-sa-key.json") -replace '\\', '/'
+          (Get-Content provider.tf -Raw) `
+            -replace 'credentials\s*=\s*file\("[^"]*"\)', "credentials = file(`"$credPath`")" `
+            | Set-Content provider.tf -NoNewline
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: Infrastructure/
+
+      - name: Terraform Init
+        shell: powershell
+        run: terraform init -no-color
+
+      - name: Terraform Apply
+        shell: powershell
+        run: terraform apply -no-color -auto-approve tfplan
+
+      - name: Show Terraform Outputs
+        shell: powershell
+        run: terraform output -no-color
+
+      # ── Post-apply: gcloud steps ─────────────────────────────────────────────
+
+      - name: Authenticate gcloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Create firewall rule — HTTP/HTTPS
+        shell: powershell
+        run: |
+          $exists = gcloud compute firewall-rules describe allow-iis-traffic --project=${{ secrets.GCP_PROJECT_ID }} 2>$null
+          if (-not $exists) {
+            gcloud compute firewall-rules create allow-iis-traffic `
+              --network=default `
+              --allow=tcp:80,tcp:443 `
+              --target-tags=iis-server `
+              --source-ranges=0.0.0.0/0 `
+              --project=${{ secrets.GCP_PROJECT_ID }}
+          } else {
+            Write-Host "Firewall rule allow-iis-traffic already exists — skipping"
+          }
+
+      - name: Create firewall rule — RDP
+        shell: powershell
+        run: |
+          $exists = gcloud compute firewall-rules describe allow-rdp --project=${{ secrets.GCP_PROJECT_ID }} 2>$null
+          if (-not $exists) {
+            gcloud compute firewall-rules create allow-rdp `
+              --network=default `
+              --allow=tcp:3389 `
+              --target-tags=iis-server `
+              --source-ranges=0.0.0.0/0 `
+              --project=${{ secrets.GCP_PROJECT_ID }}
+          } else {
+            Write-Host "Firewall rule allow-rdp already exists — skipping"
+          }
+
+      - name: Write IIS startup PowerShell script
+        shell: powershell
+        run: |
+          $script = @'
+          Install-WindowsFeature -Name Web-Server,Web-Default-Doc,Web-Http-Errors,Web-Static-Content,Web-Http-Logging,Web-Asp-Net45,Web-Net-Ext45 -IncludeManagementTools | Out-Null
+          netsh advfirewall firewall add rule name="Allow HTTP" protocol=TCP dir=in localport=80 action=allow
+          netsh advfirewall firewall add rule name="Allow HTTPS" protocol=TCP dir=in localport=443 action=allow
+          $serverName = $env:COMPUTERNAME
+          $html = "<html><body><h1>IIS Server is Running</h1><p>Server: $serverName</p></body></html>"
+          Set-Content -Path 'C:\inetpub\wwwroot\index.html' -Value $html -Encoding UTF8
+          Start-Service W3SVC -ErrorAction SilentlyContinue
+          '@
+          # Write to workspace root — avoids spaces/special chars that break gcloud --metadata-from-file on Windows
+          $scriptPath = "$env:GITHUB_WORKSPACE\iis-setup.ps1"
+          Set-Content -Path $scriptPath -Value $script -Encoding UTF8
+          Write-Host "Script written to: $scriptPath"
+
+      - name: Push IIS startup script to VM metadata
+        shell: powershell
+        run: |
+          $scriptPath = "$env:GITHUB_WORKSPACE\iis-setup.ps1"
+          # Quoting the entire key=value pair handles Windows paths correctly for gcloud
+          gcloud compute instances add-metadata windows-iis-vm `
+            --zone=us-central1-a `
+            --project=${{ secrets.GCP_PROJECT_ID }} `
+            --metadata-from-file "windows-startup-script-ps1=$scriptPath"
+
+      - name: Reset VM to trigger IIS installation
+        shell: powershell
+        run: |
+          gcloud compute instances reset windows-iis-vm `
+            --zone=us-central1-a `
+            --project=${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Wait for IIS to come up and verify
+        shell: powershell
+        run: |
+          $publicIp = terraform output -raw public_ip
+          Write-Host "Polling http://$publicIp ..."
+          for ($i = 1; $i -le 20; $i++) {
+            try {
+              $res = Invoke-WebRequest -Uri "http://$publicIp" -UseBasicParsing -TimeoutSec 5
+              if ($res.StatusCode -eq 200) {
+                Write-Host "IIS is up at http://$publicIp"
+                exit 0
+              }
+            } catch {
+              Write-Host "Attempt $i — not ready yet"
+            }
+            Start-Sleep -Seconds 30
+          }
+          Write-Warning "IIS did not respond with 200 after 10 minutes"
+          exit 1

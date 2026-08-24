@@ -1,0 +1,95 @@
+---
+# ==============================================================================
+# MASTER PLAYBOOK: run-complete-workflow.yml
+# PURPOSE: Master playbook that chains all three steps together
+# DESCRIPTION: Orchestrates the complete discover-select-deploy workflow
+# ==============================================================================
+
+- name: "Complete Windows Infrastructure Discovery and Deployment Workflow"
+  hosts: localhost
+  gather_facts: yes
+
+  vars:
+    workflow_log_file: "{{ playbook_dir }}/vars/workflow_execution.log"
+
+  tasks:
+    - name: "Display workflow header"
+      debug:
+        msg: |
+          ============================================================
+          WINDOWS INFRASTRUCTURE WORKFLOW
+          ============================================================
+          Phase 1: Discovery
+          Phase 2: Interactive Selection
+          Phase 3: Deployment
+          ============================================================
+          
+          Starting workflow at {{ ansible_date_time.iso8601 }}
+
+    - name: "Phase 1: Execute Discovery"
+      debug:
+        msg: "Running discovery on source server..."
+
+    - name: "Include discover playbook"
+      include: discover-windows-state.yml
+
+    - name: "Wait for user confirmation before selection"
+      pause:
+        prompt: |
+          
+          ============================================================
+          PHASE 1 COMPLETE: Discovery finished
+          ============================================================
+          
+          Discovery data saved to: {{ playbook_dir }}/vars/discovery_output.json
+          
+          Press ENTER to continue to interactive selection...
+          
+          Or press Ctrl+C to cancel
+
+    - name: "Phase 2: Execute Interactive Selection"
+      debug:
+        msg: "Launching interactive selection menu..."
+
+    - name: "Include interactive selection playbook"
+      include: interactive-selection.yml
+
+    - name: "Wait for user confirmation before deployment"
+      pause:
+        prompt: |
+          
+          ============================================================
+          PHASE 2 COMPLETE: Selection finished
+          ============================================================
+          
+          Selection results saved to: {{ playbook_dir }}/vars/selection_results.json
+          
+          Press ENTER to proceed with deployment to destination server...
+          
+          Or press Ctrl+C to cancel
+
+    - name: "Phase 3: Execute Deployment"
+      debug:
+        msg: "Deploying selected items to destination server..."
+
+    - name: "Include deployment playbook"
+      include: deploy-to-destination.yml
+
+    - name: "Display workflow completion"
+      debug:
+        msg: |
+          ============================================================
+          WORKFLOW COMPLETE
+          ============================================================
+          
+          All phases completed successfully!
+          
+          Generated Files:
+            1. {{ playbook_dir }}/vars/discovery_output.json
+            2. {{ playbook_dir }}/vars/selection_results.json
+            3. {{ playbook_dir }}/vars/deployment_log.json
+          
+          Log file: {{ playbook_dir }}/ansible_execution.log
+          
+          Workflow finished at {{ ansible_date_time.iso8601 }}
+          ============================================================

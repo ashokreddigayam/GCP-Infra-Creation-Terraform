@@ -1,0 +1,201 @@
+---
+# ==============================================================================
+# PLAYBOOK: discover-windows-state.yml
+# PURPOSE: Discover installed software, IIS sites, and application files
+# DESCRIPTION: Gathers comprehensive information from source Windows server
+#              without storing in files - keeps everything in memory/variables
+# ==============================================================================
+
+- name: "Discover Windows Infrastructure"
+  hosts: source_server
+  gather_facts: yes
+  vars:
+    discovered_facts_file: "{{ playbook_dir }}/vars/discovery_output.json"
+
+  tasks:
+    # =========================================================================
+    # SECTION 1: Discover Installed Software
+    # =========================================================================
+    
+    - name: "Get installed software (32-bit)"
+      ansible.windows.win_reg_stat:
+        path: "HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
+      register: software_32bit_keys
+
+    - name: "Get installed software (64-bit)"
+      ansible.windows.win_reg_stat:
+        path: "HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
+      register: software_64bit_keys
+
+    - name: "Extract 32-bit software details"
+      ansible.windows.win_reg_stat:
+        path: "HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{ item }}"
+      register: software_32bit_details
+      loop: "{{ software_32bit_keys.sub_keys }}"
+      when: software_32bit_keys.sub_keys is defined and item != ""
+
+    - name: "Extract 64-bit software details"
+      ansible.windows.win_reg_stat:
+        path: "HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{ item }}"
+      register: software_64bit_details
+      loop: "{{ software_64bit_keys.sub_keys }}"
+      when: software_64bit_keys.sub_keys is defined and item != ""
+
+    - name: "Build software inventory"
+      set_fact:
+        installed_software: "{{ installed_software | default([]) + [
+          {
+            'name': item.stat.DisplayName | default('Unknown'),
+            'version': item.stat.DisplayVersion | default('N/A'),
+            'publisher': item.stat.Publisher | default('N/A'),
+            'install_location': item.stat.InstallLocation | default('N/A'),
+            'uninstall_string': item.stat.UninstallString | default('N/A'),
+            'architecture': 'x86' if '32bit' in item.invocation.module_args.path else 'x64'
+          }
+        ] }}"
+      loop: "{{ software_32bit_details.results + software_64bit_details.results }}"
+      when: 
+        - item.stat is defined
+        - item.stat.DisplayName is defined
+        - item.stat.DisplayName != ""
+
+    # =========================================================================
+    # SECTION 2: Discover IIS Configuration
+    # =========================================================================
+
+    - name: "Check if IIS is installed"
+      ansible.windows.win_command: "powershell -Command \"Import-Module WebAdministration -ErrorAction SilentlyContinue; Get-Item IIS:\\ -ErrorAction SilentlyContinue\""
+      register: iis_check
+      changed_when: false
+      failed_when: false
+
+    - name: "Get IIS sites and app pools"
+      ansible.windows.win_powershell:
+        script: |
+          Import-Module WebAdministration
+          
+          $sites = @()
+          Get-ChildItem IIS:\Sites -ErrorAction SilentlyContinue | ForEach-Object {
+              $site = $_
+              $bindings = @()
+              
+              Get-WebBinding -Name $site.Name | ForEach-Object {
+                  $bindings += @{
+                      protocol = $_.protocol
+                      bindingInformation = $_.bindingInformation
+                  }
+              }
+              
+              $apps = @()
+              Get-WebApplication -Site $site.Name -ErrorAction SilentlyContinue | ForEach-Object {
+                  $apps += @{
+                      name = $_.name
+                      path = $_.path
+                      physicalPath = $_.physicalPath
+                      pool = $_.applicationPool
+                  }
+              }
+              
+              $sites += @{
+                  name = $site.Name
+                  state = $site.State
+                  physicalPath = $site.PhysicalPath
+                  appPool = $site.applicationPool
+                  bindings = $bindings
+                  applications = $apps
+              }
+          }
+          
+          $sites | ConvertTo-Json -Depth 10
+      register: iis_sites_json
+      failed_when: false
+
+    - name: "Parse IIS sites"
+      set_fact:
+        iis_sites: "{{ iis_sites_json.output[0] | from_json if iis_sites_json.output else [] }}"
+      when: iis_sites_json.output
+
+    - name: "Set IIS sites to empty if not installed"
+      set_fact:
+        iis_sites: []
+      when: not iis_sites_json.output or iis_sites_json.rc != 0
+
+    # =========================================================================
+    # SECTION 3: Discover Application Files
+    # =========================================================================
+
+    - name: "Find application files from IIS paths"
+      ansible.builtin.find:
+        paths: "{{ item.physicalPath }}"
+        recurse: yes
+        file_type: file
+      register: app_files_raw
+      loop: "{{ iis_sites }}"
+      when: iis_sites is defined and iis_sites | length > 0
+      failed_when: false
+
+    - name: "Build application files inventory"
+      set_fact:
+        application_files: "{{ application_files | default([]) + [
+          {
+            'site_name': item.0.name,
+            'physical_path': item.0.physicalPath,
+            'file_count': item.1.examined,
+            'files': item.1.files[:50]  # Limit to 50 files per site for readability
+          }
+        ] }}"
+      loop: "{{ iis_sites | product(app_files_raw.results) | list }}"
+      when: 
+        - item.1.files is defined
+        - item.1.files | length > 0
+
+    # =========================================================================
+    # SECTION 4: Create Comprehensive Discovery Report
+    # =========================================================================
+
+    - name: "Create comprehensive discovery data"
+      set_fact:
+        discovery_data:
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+          hostname: "{{ ansible_hostname }}"
+          os_version: "{{ ansible_os_family }} {{ ansible_distribution_version }}"
+          software_count: "{{ installed_software | length }}"
+          installed_software: "{{ installed_software | default([]) }}"
+          iis_installed: "{{ 'yes' if iis_sites else 'no' }}"
+          iis_sites_count: "{{ iis_sites | length }}"
+          iis_sites: "{{ iis_sites | default([]) }}"
+          application_files: "{{ application_files | default([]) }}"
+
+    - name: "Display discovery summary"
+      debug:
+        msg: |
+          ============================================================
+          DISCOVERY SUMMARY
+          ============================================================
+          Hostname: {{ discovery_data.hostname }}
+          OS: {{ discovery_data.os_version }}
+          
+          INSTALLED SOFTWARE: {{ discovery_data.software_count }} items
+          IIS INSTALLED: {{ discovery_data.iis_installed }}
+          IIS SITES: {{ discovery_data.iis_sites_count }}
+          
+          Next step: Interactive selection will begin...
+          ============================================================
+
+    - name: "Save discovery data to JSON"
+      copy:
+        content: "{{ discovery_data | to_nice_json }}"
+        dest: "{{ discovered_facts_file }}"
+      delegate_to: localhost
+
+    - name: "Display software samples (first 5)"
+      debug:
+        msg: "{{ discovery_data.installed_software[:5] }}"
+
+    - name: "Display IIS sites"
+      debug:
+        msg: "{{ discovery_data.iis_sites }}"
+
+    - name: "Display file summary"
+      debug:
+        msg: "{{ discovery_data.application_files }}"

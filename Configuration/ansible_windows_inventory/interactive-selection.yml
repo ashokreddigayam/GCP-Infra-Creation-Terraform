@@ -1,0 +1,78 @@
+---
+# ==============================================================================
+# PLAYBOOK: interactive-selection.yml
+# PURPOSE: Launch interactive PowerShell menu for selections
+# DESCRIPTION: Bridges Ansible and PowerShell for user selection
+# ==============================================================================
+
+- name: "Interactive Selection of Infrastructure Items"
+  hosts: localhost
+  gather_facts: no
+
+  tasks:
+    - name: "Verify discovery data exists"
+      stat:
+        path: "{{ playbook_dir }}/vars/discovery_output.json"
+      register: discovery_file
+
+    - name: "Fail if discovery data not found"
+      fail:
+        msg: |
+          Discovery data not found. Please run:
+          ansible-playbook discover-windows-state.yml
+      when: not discovery_file.stat.exists
+
+    - name: "Load discovery data"
+      include_vars:
+        file: "{{ playbook_dir }}/vars/discovery_output.json"
+        name: discovery_data
+
+    - name: "Display discovery data loaded"
+      debug:
+        msg: |
+          Loaded discovery data from {{ discovery_data.hostname }}
+          Software: {{ discovery_data.software_count }} items
+          IIS Sites: {{ discovery_data.iis_sites_count }} sites
+
+    - name: "Launch interactive PowerShell menu"
+      ansible.windows.win_powershell:
+        script: |
+          # Set execution policy for this process
+          Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+          
+          # Run the interactive menu script
+          & "{{ playbook_dir }}\scripts\interactive-menu.ps1" `
+              -DiscoveryDataFile "{{ playbook_dir }}\vars\discovery_output.json" `
+              -SelectionOutputFile "{{ playbook_dir }}\vars\selection_results.json"
+      delegate_to: localhost
+
+    - name: "Verify selection results were saved"
+      stat:
+        path: "{{ playbook_dir }}/vars/selection_results.json"
+      register: selection_file
+
+    - name: "Fail if selection was cancelled"
+      fail:
+        msg: "Selection process was cancelled or failed."
+      when: not selection_file.stat.exists
+
+    - name: "Load selection results"
+      include_vars:
+        file: "{{ playbook_dir }}/vars/selection_results.json"
+        name: selection_results
+
+    - name: "Display selected items"
+      debug:
+        msg: |
+          ============================================================
+          SELECTED ITEMS SUMMARY
+          ============================================================
+          Timestamp: {{ selection_results.timestamp }}
+          Hostname: {{ selection_results.hostname }}
+          
+          Selected Software: {{ selection_results.selected_software | length }} items
+          Selected IIS Sites: {{ selection_results.selected_iis_sites | length }} sites
+          Selected App Paths: {{ selection_results.selected_app_paths | length }} paths
+          
+          Ready for deployment to destination server.
+          ============================================================
