@@ -30,6 +30,8 @@ jobs:
         run: |
           if ($env:GCP_CREDS -and $env:GCP_CREDS.Trim() -ne '') {
             Set-Content -Path "gcp-sa-key.json" -Value $env:GCP_CREDS -Encoding UTF8
+          } elseif (Test-Path "C:\Users\ashokg\Downloads\supple-apricot-504106-m6-3e44cc1b3143.json") {
+            Copy-Item "C:\Users\ashokg\Downloads\supple-apricot-504106-m6-3e44cc1b3143.json" -Destination "gcp-sa-key.json" -Force
           }
 
 
@@ -73,6 +75,8 @@ jobs:
         run: |
           if ($env:GCP_CREDS -and $env:GCP_CREDS.Trim() -ne '') {
             Set-Content -Path "gcp-sa-key.json" -Value $env:GCP_CREDS -Encoding UTF8
+          } elseif (Test-Path "C:\Users\ashokg\Downloads\supple-apricot-504106-m6-3e44cc1b3143.json") {
+            Copy-Item "C:\Users\ashokg\Downloads\supple-apricot-504106-m6-3e44cc1b3143.json" -Destination "gcp-sa-key.json" -Force
           }
 
 
