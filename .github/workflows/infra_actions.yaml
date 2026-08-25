@@ -173,53 +173,22 @@ jobs:
             Write-Host "Firewall rule allow-rdp already exists - skipping"
           }
 
-      - name: Write IIS startup PowerShell script
-        shell: powershell
-        run: |
-          $script = @'
-          Install-WindowsFeature -Name Web-Server,Web-Default-Doc,Web-Http-Errors,Web-Static-Content,Web-Http-Logging,Web-Asp-Net45,Web-Net-Ext45 -IncludeManagementTools | Out-Null
-          netsh advfirewall firewall add rule name="Allow HTTP" protocol=TCP dir=in localport=80 action=allow
-          netsh advfirewall firewall add rule name="Allow HTTPS" protocol=TCP dir=in localport=443 action=allow
-          $serverName = $env:COMPUTERNAME
-          $html = "<html><body><h1>IIS Server is Running</h1><p>Server: $serverName</p></body></html>"
-          Set-Content -Path 'C:\inetpub\wwwroot\index.html' -Value $html -Encoding UTF8
-          Start-Service W3SVC -ErrorAction SilentlyContinue
-          '@
-          # Write to workspace root - avoids spaces/special chars that break gcloud --metadata-from-file on Windows
-          $scriptPath = "$env:GITHUB_WORKSPACE\iis-setup.ps1"
-          Set-Content -Path $scriptPath -Value $script -Encoding UTF8
-          Write-Host "Script written to: $scriptPath"
-
-      - name: Push IIS startup script to VM metadata
-        shell: powershell
-        run: |
-          $proj = if ("${{ secrets.GCP_PROJECT_ID }}") { "${{ secrets.GCP_PROJECT_ID }}" } else { "supple-apricot-504106-m6" }
-          $scriptPath = "$env:GITHUB_WORKSPACE\iis-setup.ps1"
-          # Quoting the entire key=value pair handles Windows paths correctly for gcloud
-          gcloud compute instances add-metadata windows-iis-vm --zone=us-central1-a --project=$proj --metadata-from-file "windows-startup-script-ps1=$scriptPath"
-
-      - name: Reset VM to trigger IIS installation
-        shell: powershell
-        run: |
-          $proj = if ("${{ secrets.GCP_PROJECT_ID }}") { "${{ secrets.GCP_PROJECT_ID }}" } else { "supple-apricot-504106-m6" }
-          gcloud compute instances reset windows-iis-vm --zone=us-central1-a --project=$proj
-
       - name: Wait for IIS to come up and verify
         shell: powershell
         run: |
           $publicIp = terraform output -raw public_ip
           Write-Host "Polling http://$publicIp ..."
-          for ($i = 1; $i -le 20; $i++) {
+          for ($i = 1; $i -le 30; $i++) {
             try {
               $res = Invoke-WebRequest -Uri "http://$publicIp" -UseBasicParsing -TimeoutSec 5
               if ($res.StatusCode -eq 200) {
-                Write-Host "IIS is up at http://$publicIp"
+                Write-Host "IIS is up and responding at http://$publicIp"
                 exit 0
               }
             } catch {
-              Write-Host "Attempt $i - not ready yet"
+              Write-Host "Attempt $i - waiting for IIS to complete initial startup..."
             }
-            Start-Sleep -Seconds 30
+            Start-Sleep -Seconds 10
           }
-          Write-Warning "IIS did not respond with 200 after 10 minutes"
+          Write-Warning "IIS did not respond with 200 after 5 minutes"
           exit 1
