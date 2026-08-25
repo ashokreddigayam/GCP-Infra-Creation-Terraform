@@ -42,15 +42,15 @@ jobs:
 
 
       - name: Terraform Init
-        shell: powershell
+        shell: cmd
         run: terraform init -no-color
 
       - name: Terraform Validate
-        shell: powershell
+        shell: cmd
         run: terraform validate -no-color
 
       - name: Terraform Plan
-        shell: powershell
+        shell: cmd
         run: terraform plan -no-color -out=tfplan
 
       - name: Upload plan artifact
@@ -97,15 +97,15 @@ jobs:
           path: Infrastructure/
 
       - name: Terraform Init
-        shell: powershell
+        shell: cmd
         run: terraform init -no-color
 
       - name: Terraform Apply
-        shell: powershell
+        shell: cmd
         run: terraform apply -no-color -auto-approve tfplan
 
       - name: Show Terraform Outputs
-        shell: powershell
+        shell: cmd
         run: terraform output -no-color
 
       # ── Post-apply: gcloud steps ─────────────────────────────────────────────
