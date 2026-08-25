@@ -6,34 +6,71 @@ on:
       - main
     paths:
       - 'IIS_SampleApp/**'
+  workflow_run:
+    workflows: ["Infrastructure Deployment"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 env:
-  DOTNET_VERSION:    '8.0.x'
-  PROJECT_PATH:      'IIS_SampleApp/src/DemoApp/DemoApp.csproj'
-  IIS_SITE_NAME:     'DemoApp'
-  IIS_PORT:          '8080'
-  APP_POOL_NAME:     'DemoAppPool'
-  PHYSICAL_PATH:     'C:\inetpub\DemoApp'
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_PATH:   'IIS_SampleApp/src/DemoApp/DemoApp.csproj'
 
 jobs:
   build-and-deploy:
     name: Build & Deploy to IIS
-    runs-on: self-hosted        # Windows Server with IIS + self-hosted runner installed
+    runs-on: [self-hosted, windows]
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
 
     steps:
-
       # ── 1. Checkout ──────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Setup .NET ─────────────────────────────────────────────────────────
+      # ── 2. Write GCP Credentials ─────────────────────────────────────────────
+      - name: Write GCP credentials from secret
+        shell: powershell
+        env:
+          GCP_CREDS: ${{ secrets.GCP_CREDENTIALS }}
+        run: |
+          if ($env:GCP_CREDS -and $env:GCP_CREDS.Trim() -ne '') {
+            [System.IO.File]::WriteAllText("gcp-sa-key.json", $env:GCP_CREDS, (New-Object System.Text.UTF8Encoding($false)))
+          } elseif (Test-Path "C:\Users\ashokg\Downloads\supple-apricot-504106-m6-3e44cc1b3143.json") {
+            Copy-Item "C:\Users\ashokg\Downloads\supple-apricot-504106-m6-3e44cc1b3143.json" -Destination "gcp-sa-key.json" -Force
+          }
+
+      # ── 3. Authenticate gcloud ───────────────────────────────────────────────
+      - name: Authenticate gcloud CLI
+        shell: powershell
+        run: |
+          if (Test-Path "gcp-sa-key.json") {
+            gcloud auth activate-service-account --key-file="gcp-sa-key.json"
+          } else {
+            Write-Error "gcp-sa-key.json not found for gcloud authentication"
+          }
+
+      # ── 4. Retrieve Target VM IP ─────────────────────────────────────────────
+      - name: Retrieve Target GCP VM IP
+        shell: powershell
+        run: |
+          $proj = "supple-apricot-504106-m6"
+          if ("${{ secrets.GCP_PROJECT_ID }}") { $proj = "${{ secrets.GCP_PROJECT_ID }}" }
+          
+          $ip = gcloud compute instances describe windows-iis-vm --zone=us-central1-a --project=$proj --format="get(networkInterfaces[0].accessConfigs[0].natIP)" 2>$null
+          if (-not $ip) {
+            Write-Error "Could not retrieve Public IP for windows-iis-vm in GCP project $proj. Make sure the VM is created and running."
+            exit 1
+          }
+          Write-Host "Target GCP VM Public IP: $ip"
+          echo "VM_IP=$ip" >> $env:GITHUB_ENV
+
+      # ── 5. Setup .NET ─────────────────────────────────────────────────────────
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      # ── 3. Restore & Build ────────────────────────────────────────────────────
+      # ── 6. Build & Publish ASP.NET Core App ──────────────────────────────────
       - name: Restore dependencies
         shell: powershell
         run: dotnet restore "${{ env.PROJECT_PATH }}"
@@ -42,108 +79,97 @@ jobs:
         shell: powershell
         run: dotnet build "${{ env.PROJECT_PATH }}" --configuration Release --no-restore
 
-      # ── 4. Publish ────────────────────────────────────────────────────────────
       - name: Publish application
         shell: powershell
         run: |
-          dotnet publish "${{ env.PROJECT_PATH }}" `
-            --configuration Release `
-            --output "${{ github.workspace }}\publish" `
-            --no-build
+          $pubDir = "$env:GITHUB_WORKSPACE\publish"
+          if (Test-Path $pubDir) { Remove-Item -Recurse -Force $pubDir }
+          dotnet publish "${{ env.PROJECT_PATH }}" --configuration Release --output $pubDir --no-build
+          
+          $zipPath = "$env:GITHUB_WORKSPACE\app.zip"
+          if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+          Compress-Archive -Path "$pubDir\*" -DestinationPath $zipPath -Force
+          Write-Host "Application published and compressed to $zipPath"
 
-      # ── 5. Stop existing IIS site before file copy (if running) ───────────────
-      - name: Stop IIS site if running
+      # ── 7. Deploy to GCP Windows Server IIS ──────────────────────────────────
+      - name: Deploy application to GCP VM IIS
         shell: powershell
         run: |
-          Import-Module WebAdministration -ErrorAction Stop
+          $proj = "supple-apricot-504106-m6"
+          if ("${{ secrets.GCP_PROJECT_ID }}") { $proj = "${{ secrets.GCP_PROJECT_ID }}" }
+          
+          $zipPath = "$env:GITHUB_WORKSPACE\app.zip"
+          $b64 = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($zipPath))
+          $b64File = "$env:GITHUB_WORKSPACE\app_b64.txt"
+          Set-Content -Path $b64File -Value $b64 -Encoding ASCII
 
-          $site = Get-WebSite -Name "${{ env.IIS_SITE_NAME }}" -ErrorAction SilentlyContinue
-          if ($site -and $site.State -eq 'Started') {
-            Stop-WebSite -Name "${{ env.IIS_SITE_NAME }}"
-            Write-Host "Stopped site: ${{ env.IIS_SITE_NAME }}"
-          } else {
-            Write-Host "Site not running or does not exist yet — nothing to stop."
-          }
+          Write-Host "Uploading application payload to GCP VM metadata..."
+          gcloud compute instances add-metadata windows-iis-vm --zone=us-central1-a --project=$proj --metadata-from-file "app-zip-b64=$b64File"
 
-      # ── 6. Ensure physical path exists and copy published files ───────────────
-      - name: Deploy files to IIS physical path
-        shell: powershell
-        run: |
-          $dest = "${{ env.PHYSICAL_PATH }}"
+          $vmScript = @'
+          $ErrorActionPreference = 'SilentlyContinue'
+          Import-Module WebAdministration -ErrorAction SilentlyContinue
 
-          if (-not (Test-Path $dest)) {
-            New-Item -ItemType Directory -Path $dest -Force | Out-Null
-            Write-Host "Created directory: $dest"
-          }
+          # Fetch base64 app payload from metadata
+          $b64 = Invoke-RestMethod -Headers @{"Metadata-Flavor"="Google"} -Uri "http://metadata.google.internal/computeMetadata/v1/instance/attributes/app-zip-b64" -UseBasicParsing
 
-          Copy-Item -Path "${{ github.workspace }}\publish\*" `
-                    -Destination $dest `
-                    -Recurse -Force
+          if ($b64) {
+            $bytes = [Convert]::FromBase64String($b64)
+            $destZip = "$env:TEMP\app_deploy.zip"
+            [System.IO.File]::WriteAllBytes($destZip, $bytes)
 
-          Write-Host "Files deployed to: $dest"
+            $webRoot = "C:\inetpub\wwwroot"
+            
+            # Stop site & app pool to release file locks
+            Stop-WebSite -Name "Default Web Site" -ErrorAction SilentlyContinue
+            Stop-WebAppPool -Name "DefaultAppPool" -ErrorAction SilentlyContinue
 
-      # ── 7. Configure App Pool and IIS Site (idempotent) ───────────────────────
-      - name: Configure IIS App Pool and Site
-        shell: powershell
-        run: |
-          Import-Module WebAdministration -ErrorAction Stop
+            # Clear old files
+            Remove-Item -Path "$webRoot\*" -Recurse -Force -ErrorAction SilentlyContinue
 
-          # ── App Pool ──────────────────────────────────────────────────────────
-          $poolPath = "IIS:\AppPools\${{ env.APP_POOL_NAME }}"
-          $pool = Get-Item $poolPath -ErrorAction SilentlyContinue
+            # Unpack ASP.NET Core app files
+            Expand-Archive -Path $destZip -DestinationPath $webRoot -Force
 
-          if (-not $pool) {
-            New-WebAppPool -Name "${{ env.APP_POOL_NAME }}"
-            # No managed runtime — required for ASP.NET Core
+            # Configure IIS App Pool for ASP.NET Core (No Managed Code)
+            $poolPath = "IIS:\AppPools\DefaultAppPool"
             Set-ItemProperty $poolPath -Name managedRuntimeVersion -Value ""
-            Set-ItemProperty $poolPath -Name startMode            -Value "AlwaysRunning"
-            Write-Host "Created App Pool: ${{ env.APP_POOL_NAME }}"
-          } else {
-            Write-Host "App Pool already exists: ${{ env.APP_POOL_NAME }} — skipping creation."
+            Set-ItemProperty $poolPath -Name startMode -Value "AlwaysRunning"
+
+            # Point site to wwwroot
+            Set-ItemProperty "IIS:\Sites\Default Web Site" -Name physicalPath -Value $webRoot
+
+            # Restart IIS Services
+            Start-WebAppPool -Name "DefaultAppPool" -ErrorAction SilentlyContinue
+            Start-WebSite -Name "Default Web Site" -ErrorAction SilentlyContinue
+            net start w3svc -ErrorAction SilentlyContinue
+            
+            Write-EventLog -LogName Application -Source "GCPStartup" -EntryType Information -EventId 100 -Message "ASP.NET Core IIS deployment complete" -ErrorAction SilentlyContinue
           }
+          '@
 
-          # ── IIS Site ──────────────────────────────────────────────────────────
-          $site = Get-WebSite -Name "${{ env.IIS_SITE_NAME }}" -ErrorAction SilentlyContinue
+          $vmScriptFile = "$env:GITHUB_WORKSPACE\vm-deploy.ps1"
+          Set-Content -Path $vmScriptFile -Value $vmScript -Encoding UTF8
 
-          if (-not $site) {
-            # Site does not exist → create it
-            New-WebSite -Name            "${{ env.IIS_SITE_NAME }}" `
-                        -Port            ${{ env.IIS_PORT }} `
-                        -PhysicalPath    "${{ env.PHYSICAL_PATH }}" `
-                        -ApplicationPool "${{ env.APP_POOL_NAME }}"
+          Write-Host "Triggering deployment script on GCP VM..."
+          gcloud compute instances add-metadata windows-iis-vm --zone=us-central1-a --project=$proj --metadata-from-file "windows-startup-script-ps1=$vmScriptFile"
 
-            Write-Host "Created IIS site '${{ env.IIS_SITE_NAME }}' on port ${{ env.IIS_PORT }}"
-          } else {
-            # Site already exists → skip creation, just update physical path in case it changed
-            Write-Host "IIS site '${{ env.IIS_SITE_NAME }}' already exists — skipping creation."
-            Set-ItemProperty "IIS:\Sites\${{ env.IIS_SITE_NAME }}" `
-                             -Name physicalPath `
-                             -Value "${{ env.PHYSICAL_PATH }}"
-          }
-
-      # ── 8. Start the site ─────────────────────────────────────────────────────
-      - name: Start IIS site
+      # ── 8. Health Check Verification ──────────────────────────────────────────
+      - name: Verify application deployment (health check)
         shell: powershell
         run: |
-          Import-Module WebAdministration -ErrorAction Stop
-
-          # -ErrorAction SilentlyContinue prevents failure if pool/site is already running
-          Start-WebAppPool -Name "${{ env.APP_POOL_NAME }}" -ErrorAction SilentlyContinue
-          Start-WebSite    -Name "${{ env.IIS_SITE_NAME }}" -ErrorAction SilentlyContinue
-
-          $site = Get-WebSite -Name "${{ env.IIS_SITE_NAME }}"
-          Write-Host "Site state: $($site.State)"
-
-      # ── 9. Health check ───────────────────────────────────────────────────────
-      - name: Verify deployment (health check)
-        shell: powershell
-        run: |
-          Start-Sleep -Seconds 5
-          try {
-            $res = Invoke-WebRequest -Uri "http://localhost:${{ env.IIS_PORT }}" `
-                                     -UseBasicParsing -TimeoutSec 15
-            Write-Host "Health check passed — HTTP $($res.StatusCode)"
-          } catch {
-            Write-Warning "Health check failed: $_"
-            exit 1
+          $ip = "$env:VM_IP"
+          Write-Host "Polling ASP.NET Core App at http://$ip ..."
+          for ($i = 1; $i -le 18; $i++) {
+            try {
+              $res = Invoke-WebRequest -Uri "http://$ip" -UseBasicParsing -TimeoutSec 5
+              if ($res.StatusCode -eq 200 -and ($res.Content -match "IIS_SampleApp|ASP.NET|DemoApp|running successfully|IIS Server")) {
+                Write-Host "SUCCESS: ASP.NET Core Application deployed successfully and responding at http://$ip!"
+                exit 0
+              }
+            } catch {
+              Write-Host "Attempt $i - waiting for ASP.NET Core app to respond..."
+            }
+            Start-Sleep -Seconds 10
           }
+          Write-Warning "Application did not respond with 200 after 3 minutes"
+          exit 1
