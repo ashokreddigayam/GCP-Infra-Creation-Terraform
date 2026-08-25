@@ -104,6 +104,19 @@ jobs:
           $ErrorActionPreference = 'SilentlyContinue'
           Import-Module WebAdministration -ErrorAction SilentlyContinue
 
+          # Ensure ASP.NET Core Hosting Bundle is installed on IIS
+          $modules = Get-WebGlobalModule | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue
+          if (-not $modules -or $modules -notcontains "AspNetCoreModuleV2") {
+            $hostingUrl = "https://download.visualstudio.microsoft.com/download/pr/49e9ce63-e380-4ef1-897b-9c2ae59e74c8/1e737c35f2a1b9e2c6cb3448ff61dfbd/dotnet-hosting-8.0.10-win.exe"
+            $installer  = "$env:TEMP\dotnet-hosting.exe"
+            Invoke-WebRequest -Uri $hostingUrl -OutFile $installer -UseBasicParsing -ErrorAction SilentlyContinue
+            if (Test-Path $installer) {
+              Start-Process -FilePath $installer -ArgumentList '/q /norestart' -Wait
+              net stop was /y -ErrorAction SilentlyContinue
+              net start w3svc -ErrorAction SilentlyContinue
+            }
+          }
+
           # Fetch base64 app payload from metadata
           $b64 = Invoke-RestMethod -Headers @{"Metadata-Flavor"="Google"} -Uri "http://metadata.google.internal/computeMetadata/v1/instance/attributes/app-zip-b64" -UseBasicParsing
 
@@ -118,7 +131,7 @@ jobs:
             Stop-WebSite -Name "Default Web Site" -ErrorAction SilentlyContinue
             Stop-WebAppPool -Name "DefaultAppPool" -ErrorAction SilentlyContinue
 
-            # Clear old files
+            # Clear old default static files
             Remove-Item -Path "$webRoot\*" -Recurse -Force -ErrorAction SilentlyContinue
 
             # Unpack ASP.NET Core app files
@@ -147,23 +160,26 @@ jobs:
           Write-Host "Triggering deployment script on GCP VM..."
           gcloud compute instances add-metadata windows-iis-vm --zone=us-central1-a --project=$proj --metadata-from-file "windows-startup-script-ps1=$vmScriptFile"
 
+          Write-Host "Restarting GCP VM to execute ASP.NET Core deployment script..."
+          gcloud compute instances reset windows-iis-vm --zone=us-central1-a --project=$proj --quiet
+
       # ── 8. Health Check Verification ──────────────────────────────────────────
       - name: Verify application deployment (health check)
         shell: powershell
         run: |
           $ip = "$env:VM_IP"
-          Write-Host "Polling ASP.NET Core App at http://$ip ..."
-          for ($i = 1; $i -le 18; $i++) {
+          Write-Host "Polling ASP.NET Core Application at http://$ip ..."
+          for ($i = 1; $i -le 24; $i++) {
             try {
               $res = Invoke-WebRequest -Uri "http://$ip" -UseBasicParsing -TimeoutSec 5
-              if ($res.StatusCode -eq 200 -and ($res.Content -match "IIS_SampleApp|ASP.NET|DemoApp|running successfully|IIS Server")) {
-                Write-Host "SUCCESS: ASP.NET Core Application deployed successfully and responding at http://$ip!"
+              if ($res.StatusCode -eq 200 -and ($res.Content -match "Deployment verification dashboard|Application is running successfully on IIS|DemoApp")) {
+                Write-Host "SUCCESS: ASP.NET Core Application (IIS_SampleApp) deployed successfully and live at http://$ip!"
                 exit 0
               }
             } catch {
-              Write-Host "Attempt $i - waiting for ASP.NET Core app to respond..."
+              Write-Host "Attempt $i - waiting for ASP.NET Core app to initialize after reboot..."
             }
             Start-Sleep -Seconds 10
           }
-          Write-Warning "Application did not respond with 200 after 3 minutes"
+          Write-Warning "Application did not respond with 200 after 4 minutes"
           exit 1
