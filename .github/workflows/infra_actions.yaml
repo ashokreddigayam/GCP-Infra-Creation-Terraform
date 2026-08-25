@@ -28,15 +28,7 @@ jobs:
         env:
           GCP_CREDS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          Set-Content -Path "$env:RUNNER_TEMP\gcp-sa-key.json" -Value $env:GCP_CREDS -Encoding UTF8
-
-      - name: Patch credentials path for CI runner
-        shell: powershell
-        run: |
-          $credPath = ("$env:RUNNER_TEMP\gcp-sa-key.json") -replace '\\', '/'
-          (Get-Content provider.tf -Raw) `
-            -replace 'credentials\s*=\s*file\("[^"]*"\)', "credentials = file(`"$credPath`")" `
-            | Set-Content provider.tf -NoNewline
+          Set-Content -Path "Infrastructure\gcp-sa-key.json" -Value $env:GCP_CREDS -Encoding UTF8
 
 
       - name: Terraform Init
@@ -77,15 +69,7 @@ jobs:
         env:
           GCP_CREDS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          Set-Content -Path "$env:RUNNER_TEMP\gcp-sa-key.json" -Value $env:GCP_CREDS -Encoding UTF8
-
-      - name: Patch credentials path for CI runner
-        shell: powershell
-        run: |
-          $credPath = ("$env:RUNNER_TEMP\gcp-sa-key.json") -replace '\\', '/'
-          (Get-Content provider.tf -Raw) `
-            -replace 'credentials\s*=\s*file\("[^"]*"\)', "credentials = file(`"$credPath`")" `
-            | Set-Content provider.tf -NoNewline
+          Set-Content -Path "Infrastructure\gcp-sa-key.json" -Value $env:GCP_CREDS -Encoding UTF8
 
 
       - name: Download plan artifact

@@ -59,3 +59,9 @@ variable "labels" {
     managed_by  = "terraform"
   }
 }
+
+variable "credentials_file" {
+  description = "Path to GCP Service Account JSON key file"
+  type        = string
+  default     = "gcp-sa-key.json"
+}

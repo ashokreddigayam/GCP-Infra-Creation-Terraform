@@ -12,5 +12,5 @@ terraform {
 provider "google" {
   project     = var.gcp_project_id
   region      = var.gcp_region
-  credentials = file("/tmp/Vulnerabilities/Infrastructure/supple-apricot-504106-m6-3e44cc1b3143.json")
+  credentials = fileexists(var.credentials_file) ? file(var.credentials_file) : null
 }
