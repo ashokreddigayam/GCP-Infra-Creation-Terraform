@@ -28,7 +28,9 @@ jobs:
         env:
           GCP_CREDS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          Set-Content -Path "gcp-sa-key.json" -Value $env:GCP_CREDS -Encoding UTF8
+          if ($env:GCP_CREDS -and $env:GCP_CREDS.Trim() -ne '') {
+            Set-Content -Path "gcp-sa-key.json" -Value $env:GCP_CREDS -Encoding UTF8
+          }
 
 
       - name: Terraform Init
@@ -69,7 +71,9 @@ jobs:
         env:
           GCP_CREDS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          Set-Content -Path "gcp-sa-key.json" -Value $env:GCP_CREDS -Encoding UTF8
+          if ($env:GCP_CREDS -and $env:GCP_CREDS.Trim() -ne '') {
+            Set-Content -Path "gcp-sa-key.json" -Value $env:GCP_CREDS -Encoding UTF8
+          }
 
 
       - name: Download plan artifact

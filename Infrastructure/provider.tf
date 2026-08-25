@@ -12,5 +12,5 @@ terraform {
 provider "google" {
   project     = var.gcp_project_id
   region      = var.gcp_region
-  credentials = fileexists(var.credentials_file) ? file(var.credentials_file) : null
+  credentials = (fileexists(var.credentials_file) && length(trimspace(file(var.credentials_file))) > 10) ? file(var.credentials_file) : null
 }
