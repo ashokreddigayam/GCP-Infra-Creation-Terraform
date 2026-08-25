@@ -42,18 +42,21 @@ jobs:
       - name: Auto-import existing GCP resources
         shell: powershell
         run: |
-          $proj = if ("${{ secrets.GCP_PROJECT_ID }}") { "${{ secrets.GCP_PROJECT_ID }}" } else { "supple-apricot-504106-m6" }
-          if (Test-Path "gcp-sa-key.json") { gcloud auth activate-service-account --key-file="gcp-sa-key.json" 2>$null }
-          $vmExists = gcloud compute instances describe windows-iis-vm --zone=us-central1-a --project=$proj 2>$null
-          if ($vmExists) {
+          $ErrorActionPreference = 'SilentlyContinue'
+          $proj = "supple-apricot-504106-m6"
+          if ("${{ secrets.GCP_PROJECT_ID }}") { $proj = "${{ secrets.GCP_PROJECT_ID }}" }
+          if (Test-Path "gcp-sa-key.json") { gcloud auth activate-service-account --key-file="gcp-sa-key.json" }
+          gcloud compute instances describe windows-iis-vm --zone=us-central1-a --project=$proj
+          if ($LASTEXITCODE -eq 0) {
             Write-Host "Auto-importing existing VM windows-iis-vm..."
-            terraform import -no-color google_compute_instance.windows_vm projects/$proj/zones/us-central1-a/instances/windows-iis-vm 2>$null
+            terraform import -no-color google_compute_instance.windows_vm projects/$proj/zones/us-central1-a/instances/windows-iis-vm
           }
-          $fwExists = gcloud compute firewall-rules describe allow-iis-http --project=$proj 2>$null
-          if ($fwExists) {
+          gcloud compute firewall-rules describe allow-iis-http --project=$proj
+          if ($LASTEXITCODE -eq 0) {
             Write-Host "Auto-importing existing firewall allow-iis-http..."
-            terraform import -no-color google_compute_firewall.allow_http projects/$proj/global/firewalls/allow-iis-http 2>$null
+            terraform import -no-color google_compute_firewall.allow_http projects/$proj/global/firewalls/allow-iis-http
           }
+          exit 0
 
       - name: Terraform Validate
         shell: cmd
@@ -109,18 +112,21 @@ jobs:
       - name: Auto-import existing GCP resources
         shell: powershell
         run: |
-          $proj = if ("${{ secrets.GCP_PROJECT_ID }}") { "${{ secrets.GCP_PROJECT_ID }}" } else { "supple-apricot-504106-m6" }
-          if (Test-Path "gcp-sa-key.json") { gcloud auth activate-service-account --key-file="gcp-sa-key.json" 2>$null }
-          $vmExists = gcloud compute instances describe windows-iis-vm --zone=us-central1-a --project=$proj 2>$null
-          if ($vmExists) {
+          $ErrorActionPreference = 'SilentlyContinue'
+          $proj = "supple-apricot-504106-m6"
+          if ("${{ secrets.GCP_PROJECT_ID }}") { $proj = "${{ secrets.GCP_PROJECT_ID }}" }
+          if (Test-Path "gcp-sa-key.json") { gcloud auth activate-service-account --key-file="gcp-sa-key.json" }
+          gcloud compute instances describe windows-iis-vm --zone=us-central1-a --project=$proj
+          if ($LASTEXITCODE -eq 0) {
             Write-Host "Auto-importing existing VM windows-iis-vm..."
-            terraform import -no-color google_compute_instance.windows_vm projects/$proj/zones/us-central1-a/instances/windows-iis-vm 2>$null
+            terraform import -no-color google_compute_instance.windows_vm projects/$proj/zones/us-central1-a/instances/windows-iis-vm
           }
-          $fwExists = gcloud compute firewall-rules describe allow-iis-http --project=$proj 2>$null
-          if ($fwExists) {
+          gcloud compute firewall-rules describe allow-iis-http --project=$proj
+          if ($LASTEXITCODE -eq 0) {
             Write-Host "Auto-importing existing firewall allow-iis-http..."
-            terraform import -no-color google_compute_firewall.allow_http projects/$proj/global/firewalls/allow-iis-http 2>$null
+            terraform import -no-color google_compute_firewall.allow_http projects/$proj/global/firewalls/allow-iis-http
           }
+          exit 0
 
       - name: Terraform Apply
         shell: cmd
