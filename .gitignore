@@ -7,6 +7,7 @@ obj/
 *.tfstate
 *.tfstate.backup
 *.tfplan
+tfplan
 .terraform.lock.hcl
 crash.log
 
