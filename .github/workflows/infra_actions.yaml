@@ -100,27 +100,27 @@ jobs:
 
       # ── Post-apply: gcloud steps ─────────────────────────────────────────────
 
-      - name: Authenticate gcloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
-
-      - name: Setup gcloud CLI
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      - name: Authenticate gcloud CLI
+        shell: powershell
+        run: |
+          if (Test-Path "gcp-sa-key.json") {
+            gcloud auth activate-service-account --key-file="gcp-sa-key.json"
+          } else {
+            Write-Error "gcp-sa-key.json not found for gcloud authentication"
+          }
 
       - name: Create firewall rule — HTTP/HTTPS
         shell: powershell
         run: |
-          $exists = gcloud compute firewall-rules describe allow-iis-traffic --project=${{ secrets.GCP_PROJECT_ID }} 2>$null
+          $proj = if ("${{ secrets.GCP_PROJECT_ID }}") { "${{ secrets.GCP_PROJECT_ID }}" } else { "supple-apricot-504106-m6" }
+          $exists = gcloud compute firewall-rules describe allow-iis-traffic --project=$proj 2>$null
           if (-not $exists) {
             gcloud compute firewall-rules create allow-iis-traffic `
               --network=default `
               --allow=tcp:80,tcp:443 `
               --target-tags=iis-server `
               --source-ranges=0.0.0.0/0 `
-              --project=${{ secrets.GCP_PROJECT_ID }}
+              --project=$proj
           } else {
             Write-Host "Firewall rule allow-iis-traffic already exists — skipping"
           }
@@ -128,14 +128,15 @@ jobs:
       - name: Create firewall rule — RDP
         shell: powershell
         run: |
-          $exists = gcloud compute firewall-rules describe allow-rdp --project=${{ secrets.GCP_PROJECT_ID }} 2>$null
+          $proj = if ("${{ secrets.GCP_PROJECT_ID }}") { "${{ secrets.GCP_PROJECT_ID }}" } else { "supple-apricot-504106-m6" }
+          $exists = gcloud compute firewall-rules describe allow-rdp --project=$proj 2>$null
           if (-not $exists) {
             gcloud compute firewall-rules create allow-rdp `
               --network=default `
               --allow=tcp:3389 `
               --target-tags=iis-server `
               --source-ranges=0.0.0.0/0 `
-              --project=${{ secrets.GCP_PROJECT_ID }}
+              --project=$proj
           } else {
             Write-Host "Firewall rule allow-rdp already exists — skipping"
           }
@@ -160,19 +161,21 @@ jobs:
       - name: Push IIS startup script to VM metadata
         shell: powershell
         run: |
+          $proj = if ("${{ secrets.GCP_PROJECT_ID }}") { "${{ secrets.GCP_PROJECT_ID }}" } else { "supple-apricot-504106-m6" }
           $scriptPath = "$env:GITHUB_WORKSPACE\iis-setup.ps1"
           # Quoting the entire key=value pair handles Windows paths correctly for gcloud
           gcloud compute instances add-metadata windows-iis-vm `
             --zone=us-central1-a `
-            --project=${{ secrets.GCP_PROJECT_ID }} `
+            --project=$proj `
             --metadata-from-file "windows-startup-script-ps1=$scriptPath"
 
       - name: Reset VM to trigger IIS installation
         shell: powershell
         run: |
+          $proj = if ("${{ secrets.GCP_PROJECT_ID }}") { "${{ secrets.GCP_PROJECT_ID }}" } else { "supple-apricot-504106-m6" }
           gcloud compute instances reset windows-iis-vm `
             --zone=us-central1-a `
-            --project=${{ secrets.GCP_PROJECT_ID }}
+            --project=$proj
 
       - name: Wait for IIS to come up and verify
         shell: powershell
