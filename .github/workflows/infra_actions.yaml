@@ -147,36 +147,30 @@ jobs:
             Write-Error "gcp-sa-key.json not found for gcloud authentication"
           }
 
-      - name: Create firewall rule — HTTP/HTTPS
+      - name: Create firewall rule - HTTP/HTTPS
         shell: powershell
         run: |
-          $proj = if ("${{ secrets.GCP_PROJECT_ID }}") { "${{ secrets.GCP_PROJECT_ID }}" } else { "supple-apricot-504106-m6" }
-          $exists = gcloud compute firewall-rules describe allow-iis-traffic --project=$proj 2>$null
-          if (-not $exists) {
-            gcloud compute firewall-rules create allow-iis-traffic `
-              --network=default `
-              --allow=tcp:80,tcp:443 `
-              --target-tags=iis-server `
-              --source-ranges=0.0.0.0/0 `
-              --project=$proj
+          $ErrorActionPreference = 'SilentlyContinue'
+          $proj = "supple-apricot-504106-m6"
+          if ("${{ secrets.GCP_PROJECT_ID }}") { $proj = "${{ secrets.GCP_PROJECT_ID }}" }
+          gcloud compute firewall-rules describe allow-iis-traffic --project=$proj
+          if ($LASTEXITCODE -ne 0) {
+            gcloud compute firewall-rules create allow-iis-traffic --network=default --allow=tcp:80,tcp:443 --target-tags=iis-server --source-ranges=0.0.0.0/0 --project=$proj
           } else {
-            Write-Host "Firewall rule allow-iis-traffic already exists — skipping"
+            Write-Host "Firewall rule allow-iis-traffic already exists - skipping"
           }
 
-      - name: Create firewall rule — RDP
+      - name: Create firewall rule - RDP
         shell: powershell
         run: |
-          $proj = if ("${{ secrets.GCP_PROJECT_ID }}") { "${{ secrets.GCP_PROJECT_ID }}" } else { "supple-apricot-504106-m6" }
-          $exists = gcloud compute firewall-rules describe allow-rdp --project=$proj 2>$null
-          if (-not $exists) {
-            gcloud compute firewall-rules create allow-rdp `
-              --network=default `
-              --allow=tcp:3389 `
-              --target-tags=iis-server `
-              --source-ranges=0.0.0.0/0 `
-              --project=$proj
+          $ErrorActionPreference = 'SilentlyContinue'
+          $proj = "supple-apricot-504106-m6"
+          if ("${{ secrets.GCP_PROJECT_ID }}") { $proj = "${{ secrets.GCP_PROJECT_ID }}" }
+          gcloud compute firewall-rules describe allow-rdp --project=$proj
+          if ($LASTEXITCODE -ne 0) {
+            gcloud compute firewall-rules create allow-rdp --network=default --allow=tcp:3389 --target-tags=iis-server --source-ranges=0.0.0.0/0 --project=$proj
           } else {
-            Write-Host "Firewall rule allow-rdp already exists — skipping"
+            Write-Host "Firewall rule allow-rdp already exists - skipping"
           }
 
       - name: Write IIS startup PowerShell script
@@ -191,7 +185,7 @@ jobs:
           Set-Content -Path 'C:\inetpub\wwwroot\index.html' -Value $html -Encoding UTF8
           Start-Service W3SVC -ErrorAction SilentlyContinue
           '@
-          # Write to workspace root — avoids spaces/special chars that break gcloud --metadata-from-file on Windows
+          # Write to workspace root - avoids spaces/special chars that break gcloud --metadata-from-file on Windows
           $scriptPath = "$env:GITHUB_WORKSPACE\iis-setup.ps1"
           Set-Content -Path $scriptPath -Value $script -Encoding UTF8
           Write-Host "Script written to: $scriptPath"
@@ -202,18 +196,13 @@ jobs:
           $proj = if ("${{ secrets.GCP_PROJECT_ID }}") { "${{ secrets.GCP_PROJECT_ID }}" } else { "supple-apricot-504106-m6" }
           $scriptPath = "$env:GITHUB_WORKSPACE\iis-setup.ps1"
           # Quoting the entire key=value pair handles Windows paths correctly for gcloud
-          gcloud compute instances add-metadata windows-iis-vm `
-            --zone=us-central1-a `
-            --project=$proj `
-            --metadata-from-file "windows-startup-script-ps1=$scriptPath"
+          gcloud compute instances add-metadata windows-iis-vm --zone=us-central1-a --project=$proj --metadata-from-file "windows-startup-script-ps1=$scriptPath"
 
       - name: Reset VM to trigger IIS installation
         shell: powershell
         run: |
           $proj = if ("${{ secrets.GCP_PROJECT_ID }}") { "${{ secrets.GCP_PROJECT_ID }}" } else { "supple-apricot-504106-m6" }
-          gcloud compute instances reset windows-iis-vm `
-            --zone=us-central1-a `
-            --project=$proj
+          gcloud compute instances reset windows-iis-vm --zone=us-central1-a --project=$proj
 
       - name: Wait for IIS to come up and verify
         shell: powershell
@@ -228,7 +217,7 @@ jobs:
                 exit 0
               }
             } catch {
-              Write-Host "Attempt $i — not ready yet"
+              Write-Host "Attempt $i - not ready yet"
             }
             Start-Sleep -Seconds 30
           }
