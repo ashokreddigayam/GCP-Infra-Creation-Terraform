@@ -20,7 +20,7 @@ jobs:
   build-and-deploy:
     name: Build & Deploy to IIS
     runs-on: [self-hosted, windows]
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
 
     steps:
       # ── 1. Checkout ──────────────────────────────────────────────────────────
