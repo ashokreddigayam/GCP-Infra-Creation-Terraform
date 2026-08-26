@@ -78,12 +78,12 @@ jobs:
         run: |
           $pubDir = "$env:GITHUB_WORKSPACE\publish"
           if (Test-Path $pubDir) { Remove-Item -Recurse -Force $pubDir }
-          dotnet publish "${{ env.PROJECT_PATH }}" --configuration Release --output $pubDir
+          dotnet publish "${{ env.PROJECT_PATH }}" --configuration Release -r win-x64 --self-contained true --output $pubDir
           
           $zipPath = "$env:GITHUB_WORKSPACE\app.zip"
           if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
           Compress-Archive -Path "$pubDir\*" -DestinationPath $zipPath -Force
-          Write-Host "Application published and compressed to $zipPath"
+          Write-Host "Self-contained application published and compressed to $zipPath"
 
       # ── 7. Deploy to GCP Windows Server IIS ──────────────────────────────────
       - name: Deploy application to GCP VM IIS
@@ -93,12 +93,23 @@ jobs:
           if ("${{ secrets.GCP_PROJECT_ID }}") { $proj = "${{ secrets.GCP_PROJECT_ID }}" }
           
           $zipPath = "$env:GITHUB_WORKSPACE\app.zip"
-          $b64 = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($zipPath))
-          $b64File = "$env:GITHUB_WORKSPACE\app_b64.txt"
-          Set-Content -Path $b64File -Value $b64 -Encoding ASCII
-
-          Write-Host "Uploading application payload to GCP VM metadata..."
-          gcloud compute instances add-metadata windows-iis-vm --zone=us-central1-a --project=$proj --metadata-from-file "app-zip-b64=$b64File"
+          $bytes = [System.IO.File]::ReadAllBytes($zipPath)
+          $b64 = [Convert]::ToBase64String($bytes)
+          
+          # Chunk base64 payload into 400KB chunks to fit GCP metadata limits
+          $chunkSize = 400 * 1024
+          $totalChunks = [math]::Ceiling($b64.Length / $chunkSize)
+          
+          Write-Host "Uploading application payload ($totalChunks chunks) to GCP VM metadata..."
+          for ($i = 0; $i -lt $totalChunks; $i++) {
+            $start = $i * $chunkSize
+            $len = [math]::Min($chunkSize, $b64.Length - $start)
+            $chunk = $b64.Substring($start, $len)
+            $chunkFile = "$env:GITHUB_WORKSPACE\chunk_$i.txt"
+            [System.IO.File]::WriteAllText($chunkFile, $chunk, (New-Object System.Text.UTF8Encoding($false)))
+            gcloud compute instances add-metadata windows-iis-vm --zone=us-central1-a --project=$proj --metadata-from-file "app-chunk-$i=$chunkFile"
+          }
+          gcloud compute instances add-metadata windows-iis-vm --zone=us-central1-a --project=$proj --metadata="app-total-chunks=$totalChunks"
 
           $vmScript = @'
           $ErrorActionPreference = 'SilentlyContinue'
@@ -127,10 +138,15 @@ jobs:
             }
           }
 
-          # Fetch base64 app payload from metadata
-          $b64 = Invoke-RestMethod -Headers @{"Metadata-Flavor"="Google"} -Uri "http://metadata.google.internal/computeMetadata/v1/instance/attributes/app-zip-b64" -UseBasicParsing
+          # Reassemble base64 app payload from metadata chunks
+          $totalChunks = Invoke-RestMethod -Headers @{"Metadata-Flavor"="Google"} -Uri "http://metadata.google.internal/computeMetadata/v1/instance/attributes/app-total-chunks" -UseBasicParsing
+          if ($totalChunks) {
+            $b64 = ""
+            for ($i = 0; $i -lt [int]$totalChunks; $i++) {
+              $chunk = Invoke-RestMethod -Headers @{"Metadata-Flavor"="Google"} -Uri "http://metadata.google.internal/computeMetadata/v1/instance/attributes/app-chunk-$i" -UseBasicParsing
+              $b64 += $chunk
+            }
 
-          if ($b64) {
             $bytes = [Convert]::FromBase64String($b64)
             $destZip = "$env:TEMP\app_deploy.zip"
             [System.IO.File]::WriteAllBytes($destZip, $bytes)
