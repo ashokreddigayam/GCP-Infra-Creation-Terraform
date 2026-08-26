@@ -35,12 +35,22 @@ resource "google_compute_instance" "windows_vm" {
       # Install all IIS features in one call — significantly faster than individual installs
       Install-WindowsFeature -Name Web-Server, Web-Default-Doc, Web-Http-Errors, Web-Static-Content, Web-Http-Logging, Web-App-Dev, Web-Net-Ext45, Web-Asp-Net45 -IncludeManagementTools | Out-Null
 
+      # Enable TLS 1.2 for HTTPS downloads on Windows PowerShell 5.1
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
       # Download and install .NET 8.0 Hosting Bundle for ASP.NET Core support in IIS
       $hostingUrl = "https://download.visualstudio.microsoft.com/download/pr/49e9ce63-e380-4ef1-897b-9c2ae59e74c8/1e737c35f2a1b9e2c6cb3448ff61dfbd/dotnet-hosting-8.0.10-win.exe"
       $installer  = "$env:TEMP\dotnet-hosting.exe"
       Invoke-WebRequest -Uri $hostingUrl -OutFile $installer -UseBasicParsing -ErrorAction SilentlyContinue
       if (Test-Path $installer) {
-        Start-Process -FilePath $installer -ArgumentList '/q /norestart' -Wait
+        $exitCode = 1618
+        $attempts = 0
+        while ($exitCode -eq 1618 -and $attempts -lt 12) {
+          $attempts++
+          $proc = Start-Process -FilePath $installer -ArgumentList '/q /norestart' -Wait -PassThru -ErrorAction SilentlyContinue
+          if ($proc) { $exitCode = $proc.ExitCode } else { break }
+          if ($exitCode -eq 1618) { Start-Sleep -Seconds 5 }
+        }
         net stop was /y -ErrorAction SilentlyContinue
         net start w3svc -ErrorAction SilentlyContinue
       }

@@ -104,6 +104,9 @@ jobs:
           $ErrorActionPreference = 'SilentlyContinue'
           Import-Module WebAdministration -ErrorAction SilentlyContinue
 
+          # Enable TLS 1.2 for HTTPS downloads on PowerShell 5.1
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
           # Ensure ASP.NET Core Hosting Bundle is installed on IIS
           $modules = Get-WebGlobalModule | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue
           if (-not $modules -or $modules -notcontains "AspNetCoreModuleV2") {
@@ -111,7 +114,14 @@ jobs:
             $installer  = "$env:TEMP\dotnet-hosting.exe"
             Invoke-WebRequest -Uri $hostingUrl -OutFile $installer -UseBasicParsing -ErrorAction SilentlyContinue
             if (Test-Path $installer) {
-              Start-Process -FilePath $installer -ArgumentList '/q /norestart' -Wait
+              $exitCode = 1618
+              $attempts = 0
+              while ($exitCode -eq 1618 -and $attempts -lt 12) {
+                $attempts++
+                $proc = Start-Process -FilePath $installer -ArgumentList '/q /norestart' -Wait -PassThru -ErrorAction SilentlyContinue
+                if ($proc) { $exitCode = $proc.ExitCode } else { break }
+                if ($exitCode -eq 1618) { Start-Sleep -Seconds 5 }
+              }
               net stop was /y -ErrorAction SilentlyContinue
               net start w3svc -ErrorAction SilentlyContinue
             }
@@ -155,7 +165,7 @@ jobs:
           '@
 
           $vmScriptFile = "$env:GITHUB_WORKSPACE\vm-deploy.ps1"
-          Set-Content -Path $vmScriptFile -Value $vmScript -Encoding UTF8
+          [System.IO.File]::WriteAllText($vmScriptFile, $vmScript, (New-Object System.Text.UTF8Encoding($false)))
 
           Write-Host "Triggering deployment script on GCP VM..."
           gcloud compute instances add-metadata windows-iis-vm --zone=us-central1-a --project=$proj --metadata-from-file "windows-startup-script-ps1=$vmScriptFile"
