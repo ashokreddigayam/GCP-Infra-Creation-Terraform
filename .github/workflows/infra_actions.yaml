@@ -119,7 +119,7 @@ jobs:
           gcloud compute instances describe windows-iis-vm --zone=us-central1-a --project=$proj
           if ($LASTEXITCODE -eq 0) {
             Write-Host "Auto-importing existing VM windows-iis-vm..."
-            terraform import -no-color google_compute_instance.windows_iis_vm projects/$proj/zones/us-central1-a/instances/windows-iis-vm
+            terraform import -no-color google_compute_instance.windows_vm projects/$proj/zones/us-central1-a/instances/windows-iis-vm
           }
           gcloud compute firewall-rules describe allow-iis-http --project=$proj
           if ($LASTEXITCODE -eq 0) {
