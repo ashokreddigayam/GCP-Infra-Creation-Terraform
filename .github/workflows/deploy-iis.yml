@@ -78,7 +78,7 @@ jobs:
         run: |
           $pubDir = "$env:GITHUB_WORKSPACE\publish"
           if (Test-Path $pubDir) { Remove-Item -Recurse -Force $pubDir }
-          dotnet publish "${{ env.PROJECT_PATH }}" --configuration Release --output $pubDir --no-build
+          dotnet publish "${{ env.PROJECT_PATH }}" --configuration Release --output $pubDir
           
           $zipPath = "$env:GITHUB_WORKSPACE\app.zip"
           if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
