@@ -33,6 +33,11 @@ jobs:
           } elseif (Test-Path "C:\Users\ashokg\Downloads\supple-apricot-504106-m6-3e44cc1b3143.json") {
             Copy-Item "C:\Users\ashokg\Downloads\supple-apricot-504106-m6-3e44cc1b3143.json" -Destination "gcp-sa-key.json" -Force
           }
+          if (Test-Path "gcp-sa-key.json") {
+            $keyPath = (Get-Item "gcp-sa-key.json").FullName
+            "GOOGLE_APPLICATION_CREDENTIALS=$keyPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            gcloud auth activate-service-account --key-file="$keyPath"
+          }
 
 
       - name: Terraform Init
@@ -97,6 +102,11 @@ jobs:
           } elseif (Test-Path "C:\Users\ashokg\Downloads\supple-apricot-504106-m6-3e44cc1b3143.json") {
             Copy-Item "C:\Users\ashokg\Downloads\supple-apricot-504106-m6-3e44cc1b3143.json" -Destination "gcp-sa-key.json" -Force
           }
+          if (Test-Path "gcp-sa-key.json") {
+            $keyPath = (Get-Item "gcp-sa-key.json").FullName
+            "GOOGLE_APPLICATION_CREDENTIALS=$keyPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            gcloud auth activate-service-account --key-file="$keyPath"
+          }
 
 
       - name: Download plan artifact
@@ -130,7 +140,7 @@ jobs:
 
       - name: Terraform Apply
         shell: cmd
-        run: terraform apply -no-color -auto-approve tfplan
+        run: terraform apply -no-color -auto-approve
 
       - name: Show Terraform Outputs
         shell: cmd
