@@ -111,29 +111,25 @@ jobs:
           }
           gcloud compute instances add-metadata windows-iis-vm --zone=us-central1-a --project=$proj --metadata="app-total-chunks=$totalChunks"
 
-          $vmScript = @'
-          $logFile = "C:\inetpub\wwwroot\deploy.log"
-          "Starting deployment script at $(Get-Date)" | Out-File $logFile -Encoding utf8
-
+          $timestamp = Get-Date -Format 'yyyyMMddHHmmss'
+          $vmScript = @"
+          # Deployment script generated at $timestamp
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
           Import-Module WebAdministration -ErrorAction SilentlyContinue
 
-          # Ensure ASP.NET Core Hosting Bundle is installed on IIS
-          $modules = Get-WebGlobalModule | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue
-          if (-not $modules -or $modules -notcontains "AspNetCoreModuleV2") {
-            "AspNetCoreModuleV2 missing - downloading .NET 8 Hosting Bundle..." | Out-File $logFile -Append
-            $hostingUrl = "https://aka.ms/dotnet/8.0/dotnet-hosting-win.exe"
-            $installer  = "$env:TEMP\dotnet-hosting.exe"
+          # Ensure .NET 8 Hosting Bundle is installed on IIS
+          $hostingUrl = "https://aka.ms/dotnet/8.0/dotnet-hosting-win.exe"
+          $installer  = "$env:TEMP\dotnet-hosting.exe"
+          
+          if (-not (Test-Path "C:\Program Files\dotnet\host\fxr")) {
             try {
               (New-Object System.Net.WebClient).DownloadFile($hostingUrl, $installer)
-              "Downloaded installer successfully" | Out-File $logFile -Append
             } catch {
-              "Download failed: $_" | Out-File $logFile -Append
+              Start-BitsTransfer -Source $hostingUrl -Destination $installer -ErrorAction SilentlyContinue
             }
             if (Test-Path $installer) {
-              "Installing .NET Hosting Bundle..." | Out-File $logFile -Append
               $p = Start-Process -FilePath $installer -ArgumentList '/q /norestart' -Wait -PassThru
-              "Installer exit code: $($p.ExitCode)" | Out-File $logFile -Append
+              Start-Sleep -Seconds 5
               net stop w3svc /y
               net stop was /y
               net start w3svc
@@ -180,7 +176,7 @@ jobs:
             
             Write-EventLog -LogName Application -Source "GCPStartup" -EntryType Information -EventId 100 -Message "ASP.NET Core IIS deployment complete" -ErrorAction SilentlyContinue
           }
-          '@
+          "@
 
           $vmScriptFile = "$env:GITHUB_WORKSPACE\vm-deploy.ps1"
           [System.IO.File]::WriteAllText($vmScriptFile, $vmScript, (New-Object System.Text.UTF8Encoding($false)))
