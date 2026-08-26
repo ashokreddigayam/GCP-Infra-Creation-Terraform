@@ -41,6 +41,8 @@ resource "google_compute_instance" "windows_vm" {
       Invoke-WebRequest -Uri $hostingUrl -OutFile $installer -UseBasicParsing -ErrorAction SilentlyContinue
       if (Test-Path $installer) {
         Start-Process -FilePath $installer -ArgumentList '/q /norestart' -Wait
+        net stop was /y -ErrorAction SilentlyContinue
+        net start w3svc -ErrorAction SilentlyContinue
       }
 
       $installTime = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'

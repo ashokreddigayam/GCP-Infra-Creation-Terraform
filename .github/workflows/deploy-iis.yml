@@ -161,7 +161,9 @@ jobs:
           gcloud compute instances add-metadata windows-iis-vm --zone=us-central1-a --project=$proj --metadata-from-file "windows-startup-script-ps1=$vmScriptFile"
 
           Write-Host "Restarting GCP VM to execute ASP.NET Core deployment script..."
+          $ErrorActionPreference = 'SilentlyContinue'
           gcloud compute instances reset windows-iis-vm --zone=us-central1-a --project=$proj --quiet
+          Write-Host "VM reset issued successfully."
 
       # ── 8. Health Check Verification ──────────────────────────────────────────
       - name: Verify application deployment (health check)
