@@ -112,29 +112,31 @@ jobs:
           gcloud compute instances add-metadata windows-iis-vm --zone=us-central1-a --project=$proj --metadata="app-total-chunks=$totalChunks"
 
           $vmScript = @'
-          $ErrorActionPreference = 'SilentlyContinue'
-          Import-Module WebAdministration -ErrorAction SilentlyContinue
+          $logFile = "C:\inetpub\wwwroot\deploy.log"
+          "Starting deployment script at $(Get-Date)" | Out-File $logFile -Encoding utf8
 
-          # Enable TLS 1.2 for HTTPS downloads on PowerShell 5.1
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Import-Module WebAdministration -ErrorAction SilentlyContinue
 
           # Ensure ASP.NET Core Hosting Bundle is installed on IIS
           $modules = Get-WebGlobalModule | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue
           if (-not $modules -or $modules -notcontains "AspNetCoreModuleV2") {
+            "AspNetCoreModuleV2 missing - downloading .NET 8 Hosting Bundle..." | Out-File $logFile -Append
             $hostingUrl = "https://download.visualstudio.microsoft.com/download/pr/49e9ce63-e380-4ef1-897b-9c2ae59e74c8/1e737c35f2a1b9e2c6cb3448ff61dfbd/dotnet-hosting-8.0.10-win.exe"
             $installer  = "$env:TEMP\dotnet-hosting.exe"
-            Invoke-WebRequest -Uri $hostingUrl -OutFile $installer -UseBasicParsing -ErrorAction SilentlyContinue
+            try {
+              (New-Object System.Net.WebClient).DownloadFile($hostingUrl, $installer)
+              "Downloaded installer successfully" | Out-File $logFile -Append
+            } catch {
+              "Download failed: $_" | Out-File $logFile -Append
+            }
             if (Test-Path $installer) {
-              $exitCode = 1618
-              $attempts = 0
-              while ($exitCode -eq 1618 -and $attempts -lt 12) {
-                $attempts++
-                $proc = Start-Process -FilePath $installer -ArgumentList '/q /norestart' -Wait -PassThru -ErrorAction SilentlyContinue
-                if ($proc) { $exitCode = $proc.ExitCode } else { break }
-                if ($exitCode -eq 1618) { Start-Sleep -Seconds 5 }
-              }
-              net stop was /y -ErrorAction SilentlyContinue
-              net start w3svc -ErrorAction SilentlyContinue
+              "Installing .NET Hosting Bundle..." | Out-File $logFile -Append
+              $p = Start-Process -FilePath $installer -ArgumentList '/q /norestart' -Wait -PassThru
+              "Installer exit code: $($p.ExitCode)" | Out-File $logFile -Append
+              net stop w3svc /y
+              net stop was /y
+              net start w3svc
             }
           }
 
