@@ -122,7 +122,7 @@ jobs:
           $modules = Get-WebGlobalModule | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue
           if (-not $modules -or $modules -notcontains "AspNetCoreModuleV2") {
             "AspNetCoreModuleV2 missing - downloading .NET 8 Hosting Bundle..." | Out-File $logFile -Append
-            $hostingUrl = "https://download.visualstudio.microsoft.com/download/pr/49e9ce63-e380-4ef1-897b-9c2ae59e74c8/1e737c35f2a1b9e2c6cb3448ff61dfbd/dotnet-hosting-8.0.10-win.exe"
+            $hostingUrl = "https://aka.ms/dotnet/8.0/dotnet-hosting-win.exe"
             $installer  = "$env:TEMP\dotnet-hosting.exe"
             try {
               (New-Object System.Net.WebClient).DownloadFile($hostingUrl, $installer)

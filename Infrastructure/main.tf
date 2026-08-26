@@ -39,7 +39,7 @@ resource "google_compute_instance" "windows_vm" {
       [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
       # Download and install .NET 8.0 Hosting Bundle for ASP.NET Core support in IIS
-      $hostingUrl = "https://download.visualstudio.microsoft.com/download/pr/49e9ce63-e380-4ef1-897b-9c2ae59e74c8/1e737c35f2a1b9e2c6cb3448ff61dfbd/dotnet-hosting-8.0.10-win.exe"
+      $hostingUrl = "https://aka.ms/dotnet/8.0/dotnet-hosting-win.exe"
       $installer  = "$env:TEMP\dotnet-hosting.exe"
       Invoke-WebRequest -Uri $hostingUrl -OutFile $installer -UseBasicParsing -ErrorAction SilentlyContinue
       if (Test-Path $installer) {
