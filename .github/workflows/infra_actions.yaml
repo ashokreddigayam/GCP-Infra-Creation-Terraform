@@ -165,7 +165,7 @@ jobs:
           if ("${{ secrets.GCP_PROJECT_ID }}") { $proj = "${{ secrets.GCP_PROJECT_ID }}" }
           gcloud compute firewall-rules describe allow-iis-traffic --project=$proj
           if ($LASTEXITCODE -ne 0) {
-            gcloud compute firewall-rules create allow-iis-traffic --network=default --allow="tcp:80,tcp:443" --target-tags=iis-server --source-ranges=0.0.0.0/0 --project=$proj
+            gcloud compute firewall-rules create allow-iis-traffic --network=default --allow="tcp:80,tcp:443,tcp:5985" --target-tags=iis-server --source-ranges=0.0.0.0/0 --project=$proj
           } else {
             Write-Host "Firewall rule allow-iis-traffic already exists - skipping"
           }

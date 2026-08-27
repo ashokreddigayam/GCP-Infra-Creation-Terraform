@@ -92,6 +92,16 @@ resource "google_compute_instance" "windows_vm" {
       New-NetFirewallRule -DisplayName 'IIS HTTP'      -Direction Inbound -Protocol TCP -LocalPort 80   -Action Allow -ErrorAction SilentlyContinue
       New-NetFirewallRule -DisplayName 'IIS HTTP 8080' -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow -ErrorAction SilentlyContinue
 
+      # Configure WinRM for direct remote PowerShell deployment (no VM reboot needed)
+      net user DeployAdmin "GcpDeploy@2026!" /add /y -ErrorAction SilentlyContinue
+      net localgroup Administrators DeployAdmin /add -ErrorAction SilentlyContinue
+      Enable-PSRemoting -Force -ErrorAction SilentlyContinue
+      winrm quickconfig -q -ErrorAction SilentlyContinue
+      winrm set winrm/config/service/auth '@{Basic="true"}' -ErrorAction SilentlyContinue
+      winrm set winrm/config/service '@{AllowUnencrypted="true"}' -ErrorAction SilentlyContinue
+      winrm set winrm/config/winrs '@{MaxMemoryPerShellMB="2048"}' -ErrorAction SilentlyContinue
+      New-NetFirewallRule -DisplayName 'WinRM HTTP 5985' -Direction Inbound -Protocol TCP -LocalPort 5985 -Action Allow -ErrorAction SilentlyContinue
+
       # Ensure IIS service is running and set to auto-start
       Set-Service   W3SVC -StartupType Automatic
       Start-Service W3SVC
@@ -106,14 +116,14 @@ resource "google_compute_instance" "windows_vm" {
   }
 }
 
-# Allow HTTP (80) and DemoApp (8080) inbound — blocked by default in GCP
+# Allow HTTP (80), DemoApp (8080), and WinRM (5985) inbound — blocked by default in GCP
 resource "google_compute_firewall" "allow_http" {
   name    = "allow-iis-http"
   network = "default"
 
   allow {
     protocol = "tcp"
-    ports    = ["80", "8080"]
+    ports    = ["80", "8080", "5985"]
   }
 
   # Applies only to VMs tagged as iis-server
