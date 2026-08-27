@@ -47,19 +47,25 @@ jobs:
       - name: Auto-import existing GCP resources
         shell: powershell
         run: |
-          $ErrorActionPreference = 'SilentlyContinue'
+          $ProgressPreference = 'SilentlyContinue'
           $proj = "supple-apricot-504106-m6"
           if ("${{ secrets.GCP_PROJECT_ID }}") { $proj = "${{ secrets.GCP_PROJECT_ID }}" }
-          if (Test-Path "gcp-sa-key.json") { gcloud auth activate-service-account --key-file="gcp-sa-key.json" }
-          gcloud compute instances describe windows-iis-vm --zone=us-central1-a --project=$proj
+          if (Test-Path "gcp-sa-key.json") { gcloud auth activate-service-account --key-file="gcp-sa-key.json" | Out-Null }
+          Write-Host "Checking for existing VM windows-iis-vm..."
+          $null = gcloud compute instances describe windows-iis-vm --zone=us-central1-a --project=$proj 2>&1
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "Auto-importing existing VM windows-iis-vm..."
-            terraform import -no-color google_compute_instance.windows_vm projects/$proj/zones/us-central1-a/instances/windows-iis-vm
+            Write-Host "Auto-importing existing VM windows-iis-vm into Terraform state..."
+            terraform import google_compute_instance.windows_vm projects/$proj/zones/us-central1-a/instances/windows-iis-vm
+          } else {
+            Write-Host "No existing VM windows-iis-vm found."
           }
-          gcloud compute firewall-rules describe allow-iis-http --project=$proj
+          Write-Host "Checking for existing firewall allow-iis-http..."
+          $null = gcloud compute firewall-rules describe allow-iis-http --project=$proj 2>&1
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "Auto-importing existing firewall allow-iis-http..."
-            terraform import -no-color google_compute_firewall.allow_http projects/$proj/global/firewalls/allow-iis-http
+            Write-Host "Auto-importing existing firewall allow-iis-http into Terraform state..."
+            terraform import google_compute_firewall.allow_http projects/$proj/global/firewalls/allow-iis-http
+          } else {
+            Write-Host "No existing firewall allow-iis-http found."
           }
           exit 0
 
@@ -186,6 +192,7 @@ jobs:
       - name: Wait for IIS to come up and verify
         shell: powershell
         run: |
+          $ProgressPreference = 'SilentlyContinue'
           $publicIp = terraform output -raw public_ip
           Write-Host "Polling http://$publicIp ..."
           for ($i = 1; $i -le 30; $i++) {

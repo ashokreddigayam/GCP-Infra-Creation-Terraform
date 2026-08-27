@@ -79,6 +79,7 @@ jobs:
       - name: Deploy application to GCP VM IIS (Direct Deployment - No Reboot)
         shell: powershell
         run: |
+          $ProgressPreference = 'SilentlyContinue'
           $ip = "$env:VM_IP"
           $zipPath = "$env:GITHUB_WORKSPACE\app.zip"
           $proj = "supple-apricot-504106-m6"
@@ -150,6 +151,7 @@ jobs:
       - name: Verify application deployment (health check)
         shell: powershell
         run: |
+          $ProgressPreference = 'SilentlyContinue'
           $ip = "$env:VM_IP"
           Write-Host "Verifying ASP.NET Core Application at http://$ip ..."
           for ($i = 1; $i -le 12; $i++) {
