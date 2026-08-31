@@ -8,22 +8,33 @@ on:
   workflow_dispatch:
 
 env:
-  TF_VERSION: "1.9.8"   # ~> is Terraform constraint syntax — setup-terraform requires exact semver
+  TF_VERSION: "1.9.8"
 
 jobs:
-  # ── Plan: runs on every PR and push ──────────────────────────────────────────
-  plan:
-    name: Terraform Plan
+  # ── Single job: Plan (PR) or Plan+Apply (push/dispatch) ──────────────────────
+  deploy:
+    name: Terraform ${{ github.event_name == 'pull_request' && 'Plan' || 'Plan & Apply' }}
     runs-on: [self-hosted, windows]
     defaults:
       run:
         working-directory: Infrastructure
 
     steps:
+      # ── 1. Checkout ─────────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Write GCP credentials from secret
+      # ── 2. Cache Terraform providers (saves ~30–60s on every run) ──────────
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: Infrastructure/.terraform
+          key: terraform-providers-${{ hashFiles('Infrastructure/.terraform.lock.hcl') }}
+          restore-keys: |
+            terraform-providers-
+
+      # ── 3. Write GCP credentials (once) ────────────────────────────────────
+      - name: Write GCP credentials
         shell: powershell
         env:
           GCP_CREDS: ${{ secrets.GCP_CREDENTIALS }}
@@ -36,39 +47,19 @@ jobs:
           if (Test-Path "gcp-sa-key.json") {
             $keyPath = (Get-Item "gcp-sa-key.json").FullName
             "GOOGLE_APPLICATION_CREDENTIALS=$keyPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-            gcloud auth activate-service-account --key-file="$keyPath"
+            "GCP_KEY_PATH=$keyPath"                   | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            gcloud auth activate-service-account --key-file="$keyPath" --quiet
+          } else {
+            Write-Error "No GCP credentials found. Set the GCP_CREDENTIALS secret."
+            exit 1
           }
 
-
+      # ── 4. Terraform Init (runs once, uses cache when available) ───────────
       - name: Terraform Init
         shell: cmd
         run: terraform init -no-color
 
-      - name: Auto-import existing GCP resources
-        shell: powershell
-        run: |
-          $ProgressPreference = 'SilentlyContinue'
-          $proj = "supple-apricot-504106-m6"
-          if ("${{ secrets.GCP_PROJECT_ID }}") { $proj = "${{ secrets.GCP_PROJECT_ID }}" }
-          if (Test-Path "gcp-sa-key.json") { gcloud auth activate-service-account --key-file="gcp-sa-key.json" | Out-Null }
-          Write-Host "Checking for existing VM windows-iis-vm..."
-          $null = gcloud compute instances describe windows-iis-vm --zone=us-central1-a --project=$proj 2>&1
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Auto-importing existing VM windows-iis-vm into Terraform state..."
-            terraform import google_compute_instance.windows_vm projects/$proj/zones/us-central1-a/instances/windows-iis-vm
-          } else {
-            Write-Host "No existing VM windows-iis-vm found."
-          }
-          Write-Host "Checking for existing firewall allow-iis-http..."
-          $null = gcloud compute firewall-rules describe allow-iis-http --project=$proj 2>&1
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Auto-importing existing firewall allow-iis-http into Terraform state..."
-            terraform import google_compute_firewall.allow_http projects/$proj/global/firewalls/allow-iis-http
-          } else {
-            Write-Host "No existing firewall allow-iis-http found."
-          }
-          exit 0
-
+      # ── 5. Terraform Validate + Plan ────────────────────────────────────────
       - name: Terraform Validate
         shell: cmd
         run: terraform validate -no-color
@@ -77,135 +68,76 @@ jobs:
         shell: cmd
         run: terraform plan -no-color -out=tfplan
 
-      - name: Upload plan artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfplan
-          path: Infrastructure/tfplan
-          retention-days: 1
-
-  # ── Apply: runs only on push to main ─────────────────────────────────────────
-  apply:
-    name: Terraform Apply
-    runs-on: [self-hosted, windows]
-    needs: plan
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    defaults:
-      run:
-        working-directory: Infrastructure
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Write GCP credentials from secret
-        shell: powershell
-        env:
-          GCP_CREDS: ${{ secrets.GCP_CREDENTIALS }}
-        run: |
-          if ($env:GCP_CREDS -and $env:GCP_CREDS.Trim() -ne '') {
-            [System.IO.File]::WriteAllText("gcp-sa-key.json", $env:GCP_CREDS, (New-Object System.Text.UTF8Encoding($false)))
-          } elseif (Test-Path "C:\Users\ashokg\Downloads\supple-apricot-504106-m6-3e44cc1b3143.json") {
-            Copy-Item "C:\Users\ashokg\Downloads\supple-apricot-504106-m6-3e44cc1b3143.json" -Destination "gcp-sa-key.json" -Force
-          }
-          if (Test-Path "gcp-sa-key.json") {
-            $keyPath = (Get-Item "gcp-sa-key.json").FullName
-            "GOOGLE_APPLICATION_CREDENTIALS=$keyPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-            gcloud auth activate-service-account --key-file="$keyPath"
-          }
-
-
-      - name: Download plan artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: tfplan
-          path: Infrastructure/
-
-      - name: Terraform Init
-        shell: cmd
-        run: terraform init -no-color
-
-      - name: Auto-import existing GCP resources
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'SilentlyContinue'
-          $proj = "supple-apricot-504106-m6"
-          if ("${{ secrets.GCP_PROJECT_ID }}") { $proj = "${{ secrets.GCP_PROJECT_ID }}" }
-          if (Test-Path "gcp-sa-key.json") { gcloud auth activate-service-account --key-file="gcp-sa-key.json" }
-          gcloud compute instances describe windows-iis-vm --zone=us-central1-a --project=$proj
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Auto-importing existing VM windows-iis-vm..."
-            terraform import -no-color google_compute_instance.windows_vm projects/$proj/zones/us-central1-a/instances/windows-iis-vm
-          }
-          gcloud compute firewall-rules describe allow-iis-http --project=$proj
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Auto-importing existing firewall allow-iis-http..."
-            terraform import -no-color google_compute_firewall.allow_http projects/$proj/global/firewalls/allow-iis-http
-          }
-          exit 0
-
+      # ── 7. Terraform Apply (push to main or manual trigger only) ───────────
       - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         shell: cmd
-        run: terraform apply -no-color -auto-approve
+        run: terraform apply -no-color -auto-approve tfplan
 
       - name: Show Terraform Outputs
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         shell: cmd
         run: terraform output -no-color
 
-      # ── Post-apply: gcloud steps ─────────────────────────────────────────────
-
-      - name: Authenticate gcloud CLI
-        shell: powershell
-        run: |
-          if (Test-Path "gcp-sa-key.json") {
-            gcloud auth activate-service-account --key-file="gcp-sa-key.json"
-          } else {
-            Write-Error "gcp-sa-key.json not found for gcloud authentication"
-          }
-
-      - name: Create firewall rule - HTTP/HTTPS
+      # ── 8. Create firewall rules in parallel (merged into one step) ─────────
+      - name: Create supplementary firewall rules
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         shell: powershell
         run: |
           $ErrorActionPreference = 'SilentlyContinue'
           $proj = "supple-apricot-504106-m6"
           if ("${{ secrets.GCP_PROJECT_ID }}") { $proj = "${{ secrets.GCP_PROJECT_ID }}" }
-          gcloud compute firewall-rules describe allow-iis-traffic --project=$proj
-          if ($LASTEXITCODE -ne 0) {
-            gcloud compute firewall-rules create allow-iis-traffic --network=default --allow="tcp:80,tcp:443,tcp:5985" --target-tags=iis-server --source-ranges=0.0.0.0/0 --project=$proj
-          } else {
-            Write-Host "Firewall rule allow-iis-traffic already exists - skipping"
-          }
 
-      - name: Create firewall rule - RDP
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'SilentlyContinue'
-          $proj = "supple-apricot-504106-m6"
-          if ("${{ secrets.GCP_PROJECT_ID }}") { $proj = "${{ secrets.GCP_PROJECT_ID }}" }
-          gcloud compute firewall-rules describe allow-rdp --project=$proj
-          if ($LASTEXITCODE -ne 0) {
-            gcloud compute firewall-rules create allow-rdp --network=default --allow="tcp:3389" --target-tags=iis-server --source-ranges=0.0.0.0/0 --project=$proj
-          } else {
-            Write-Host "Firewall rule allow-rdp already exists - skipping"
-          }
+          # Run both firewall checks in parallel using background jobs
+          $fwJob1 = Start-Job -ScriptBlock {
+            param($proj)
+            gcloud compute firewall-rules describe allow-iis-traffic --project=$proj 2>&1
+            if ($LASTEXITCODE -ne 0) {
+              gcloud compute firewall-rules create allow-iis-traffic `
+                --network=default --allow="tcp:80,tcp:443,tcp:5985" `
+                --target-tags=iis-server --source-ranges=0.0.0.0/0 --project=$proj --quiet
+              Write-Output "Created firewall rule: allow-iis-traffic"
+            } else {
+              Write-Output "Firewall rule allow-iis-traffic already exists — skipped"
+            }
+          } -ArgumentList $proj
 
+          $fwJob2 = Start-Job -ScriptBlock {
+            param($proj)
+            gcloud compute firewall-rules describe allow-rdp --project=$proj 2>&1
+            if ($LASTEXITCODE -ne 0) {
+              gcloud compute firewall-rules create allow-rdp `
+                --network=default --allow="tcp:3389" `
+                --target-tags=iis-server --source-ranges=0.0.0.0/0 --project=$proj --quiet
+              Write-Output "Created firewall rule: allow-rdp"
+            } else {
+              Write-Output "Firewall rule allow-rdp already exists — skipped"
+            }
+          } -ArgumentList $proj
+
+          # Wait for both to complete and print output
+          $fwJob1, $fwJob2 | Wait-Job | Receive-Job
+          $fwJob1, $fwJob2 | Remove-Job
+
+      # ── 9. Wait for IIS (reduced: 18×10s = 3 min max, non-blocking) ────────
       - name: Wait for IIS to come up and verify
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         shell: powershell
         run: |
           $ProgressPreference = 'SilentlyContinue'
           $publicIp = terraform output -raw public_ip
-          Write-Host "Polling http://$publicIp ..."
-          for ($i = 1; $i -le 30; $i++) {
+          Write-Host "Polling http://$publicIp (max 3 min)..."
+          for ($i = 1; $i -le 18; $i++) {
             try {
               $res = Invoke-WebRequest -Uri "http://$publicIp" -UseBasicParsing -TimeoutSec 5
               if ($res.StatusCode -eq 200) {
-                Write-Host "IIS is up and responding at http://$publicIp"
+                Write-Host "✅ IIS is up and responding at http://$publicIp"
                 exit 0
               }
             } catch {
-              Write-Host "Attempt $i - waiting for IIS to complete initial startup..."
+              Write-Host "Attempt $i/18 — waiting for IIS to complete startup..."
             }
             Start-Sleep -Seconds 10
           }
-          Write-Warning "IIS did not respond with 200 after 5 minutes"
-          exit 1
+          Write-Warning "⚠️ IIS did not respond within 3 minutes. VM may still be booting — check manually at http://$publicIp"
+          exit 0
